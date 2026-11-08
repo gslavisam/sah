@@ -25,7 +25,7 @@ src/App.tsx ── initWizardChess()
        ├── proceduralni ambijenti po izabranoj temi
        ├── lokalna šahovska pravila i stanje partije
        ├── heuristički AI protivnik
-       ├── GLB modeli i animacije
+       ├── GLB modeli/animacije i proceduralni antički set
        ├── DOM HUD događaji i browser CustomEvent-i
        └── window.wizardChess programatski API
 
@@ -50,7 +50,7 @@ Engine očekuje da React prvo prikaže HUD elemente koje zatim pronalazi preko I
 | Fajl | Odgovornost |
 | --- | --- |
 | [src/main.tsx](./src/main.tsx) | React ulazna tačka; kreira root i uvozi `src/styles.css`. |
-| [src/App.tsx](./src/App.tsx) | Glavni React ekran, inicijalizacija engine-a, stanje izabranog AI lika, događaji poteza/resetovanja, hint, undo, mobilni panel i kompozicija HUD-a. |
+| [src/App.tsx](./src/App.tsx) | Glavni React ekran, inicijalizacija engine-a, izbor/pamćenje seta figura i AI lika, događaji poteza/resetovanja, hint, undo, mobilni panel i kompozicija HUD-a. |
 | [src/styles.css](./src/styles.css) | Stilovi aplikacije, HUD-a, AI panela, modala, mobilnog interfejsa i prikaza nad Three.js canvas-om. |
 | [src/components/PersonaSelector.tsx](./src/components/PersonaSelector.tsx) | Prikazuje ličnosti iz `PERSONAS` i poziva `onSelectPersona(id)`. |
 | [src/components/AIBubble.tsx](./src/components/AIBubble.tsx) | Prikazuje ime/ličnost, poruku, stanje učitavanja, glas, dugme za hint, Gemini podešavanje i minimizaciju panela. |
@@ -62,7 +62,7 @@ Engine očekuje da React prvo prikaže HUD elemente koje zatim pronalazi preko I
 
 | Fajl | Odgovornost |
 | --- | --- |
-| [src/wizardChessEngine.js](./src/wizardChessEngine.js) | Centralni Three.js i šahovski engine. Sadrži scenu, učitavanje modela, pravila, stanje partije, animacije, lokalni AI, kontrole kamere, HUD događaje i API za automatizaciju. |
+| [src/wizardChessEngine.js](./src/wizardChessEngine.js) | Centralni Three.js i šahovski engine. Sadrži scenu, GLB i proceduralne figure, pravila, stanje partije, animacije, lokalni AI, kontrole kamere, HUD događaje i API za automatizaciju. |
 | [src/services/geminiService.ts](./src/services/geminiService.ts) | Tipovi i definicije ličnosti; Gemini generisanje reakcija, reakcija na undo i hintova; lokalni fallback odgovori. |
 | [src/services/sceneThemes.ts](./src/services/sceneThemes.ts) | Tipizirane postavke pozadine, magle, svetala i tona kamenih materijala za teme `mentor`, `roast` i `rival`. |
 | [src/services/progressionService.ts](./src/services/progressionService.ts) | XP, nivoi, titule, nizovi i statistika igrača; čuvanje u `localStorage`; obaveštavanje React pretplatnika. |
@@ -118,6 +118,8 @@ Potezi u Akademiji emituju odvojeni `wizardchess:academy-move` događaj. `App` k
 - teksture, materijale i animacije koje dolaze uz te modele.
 
 Modele engine traži prvo kao gzip-kompresovani Base64 GLB iz `./assets/glb/`, pa pokušava običan `.glb` fajl kao rezervu. Učitavanje se odvija pre postavljanja početne table i pokretanja animacione petlje.
+
+`setPieceSet('wizard' | 'ancient')` menja prikaz svih figura uživo bez menjanja polja, poteza ili istorije partije. Čarobnjački set koristi postojeće rigovane GLB modele; antički set gradi siluete hoplita, jahača, stub-topa, kralja i kraljice kroz Three.js geometriju i materijale. React čuva korisnikov izbor u `localStorage`.
 
 `src/services/sceneThemes.ts` definiše identifikatore i palete, a `src/services/sceneEnvironments.ts` gradi tri grupe dekorativne geometrije: Alistairove armilarne sfere koje se polako okreću, Grixove zupčanike i nisko lebdeće varnice, odnosno Valeriusove heraldske zastave koje se blago njišu. `stepScene()` u `src/wizardChessEngine.js` ažurira samo trenutno vidljivu grupu; izbor teme ne dodaje nove objekte pri svakom izboru. Dekoracije ostaju van table i dopunjuju postojeću katedralu — nisu zamena za tri kompletna, zasebna okruženja.
 

@@ -15,6 +15,7 @@ export function initWizardChess() {
     // =========================================================================
     const PIECE_TYPES = ['pawn', 'rook', 'knight', 'bishop', 'queen', 'king'];
     const PIECE_VALUES = { pawn: 100, knight: 320, bishop: 330, rook: 500, queen: 900, king: 20000 };
+    const PIECE_SET_IDS = ['wizard', 'ancient'];
     const BOARD_SQ_SIZE = 0.34;
     const BOARD_SURFACE_Y = 0.775;
 
@@ -920,6 +921,12 @@ export function initWizardChess() {
     const activeMixers = [];
     const shatterDebris = [];
     const clock = new THREE.Clock();
+    let activePieceSet = 'wizard';
+    const pieceSetMaterials = {
+      bronze: new THREE.MeshStandardMaterial({ color: 0x9b713a, roughness: 0.34, metalness: 0.76 }),
+      gold: new THREE.MeshStandardMaterial({ color: 0xd4af67, roughness: 0.28, metalness: 0.82 }),
+      darkBronze: new THREE.MeshStandardMaterial({ color: 0x4c3928, roughness: 0.4, metalness: 0.68 })
+    };
 
     const boardGroup = new THREE.Group();
     scene.add(boardGroup);
@@ -1605,13 +1612,160 @@ export function initWizardChess() {
       }
     }
 
+    function addAncientPieceMesh(root, geometry, material, position, scale = null, rotation = null) {
+      const mesh = new THREE.Mesh(geometry, material);
+      if (position) mesh.position.set(position[0], position[1], position[2]);
+      if (scale) mesh.scale.set(scale[0], scale[1], scale[2]);
+      if (rotation) mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      root.add(mesh);
+      return mesh;
+    }
+
+    function createAncientPiece(type, color) {
+      const root = new THREE.Group();
+      const primary = color === 'w' ? whitePieceMat : blackPieceMat;
+      const accent = pieceSetMaterials.bronze;
+      const brightAccent = pieceSetMaterials.gold;
+      const darkAccent = pieceSetMaterials.darkBronze;
+      const lathe = (points, material, position = [0, 0, 0]) =>
+        addAncientPieceMesh(
+          root,
+          new THREE.LatheGeometry(points.map(([x, y]) => new THREE.Vector2(x, y)), 20),
+          material,
+          position
+        );
+      const cylinder = (top, bottom, height, material, position, rotation = null, segments = 16) =>
+        addAncientPieceMesh(
+          root,
+          new THREE.CylinderGeometry(top, bottom, height, segments),
+          material,
+          position,
+          null,
+          rotation
+        );
+      const sphere = (material, position, scale) =>
+        addAncientPieceMesh(root, new THREE.SphereGeometry(0.5, 16, 12), material, position, scale);
+      const box = (material, position, scale, rotation = null) =>
+        addAncientPieceMesh(root, new THREE.BoxGeometry(1, 1, 1), material, position, scale, rotation);
+      const base = () =>
+        lathe(
+          [[0.08, 0.015], [0.34, 0.015], [0.37, 0.055], [0.34, 0.09], [0.24, 0.12], [0.1, 0.14]],
+          accent
+        );
+      const addShield = (x, y, z) => {
+        addAncientPieceMesh(
+          root,
+          new THREE.CylinderGeometry(0.21, 0.17, 0.07, 8),
+          brightAccent,
+          [x, y, z],
+          [1, 1, 1],
+          [Math.PI / 2, 0, 0]
+        );
+        box(darkAccent, [x, y, z + 0.042], [0.035, 0.29, 0.022]);
+      };
+
+      base();
+      if (type === 'rook') {
+        lathe(
+          [[0.1, 0.12], [0.2, 0.15], [0.17, 0.2], [0.12, 0.26], [0.13, 0.31],
+            [0.22, 0.35], [0.24, 0.4], [0.2, 0.44], [0.2, 0.91],
+            [0.27, 0.96], [0.29, 1.02], [0.23, 1.08], [0.11, 1.12]],
+          primary
+        );
+        lathe([[0.2, 0.42], [0.235, 0.44], [0.235, 0.47], [0.2, 0.49]], brightAccent);
+        lathe([[0.22, 0.9], [0.3, 0.94], [0.3, 0.99], [0.24, 1.01]], brightAccent);
+        for (let i = 0; i < 8; i++) {
+          const angle = (i / 8) * Math.PI * 2;
+          cylinder(0.025, 0.025, 0.54, accent, [Math.cos(angle) * 0.205, 0.68, Math.sin(angle) * 0.205], null, 8);
+        }
+        for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * Math.PI * 2;
+          const crenel = box(brightAccent, [Math.cos(angle) * 0.23, 1.12, Math.sin(angle) * 0.23], [0.12, 0.18, 0.12]);
+          crenel.rotation.y = -angle;
+        }
+      } else if (type === 'knight') {
+        sphere(primary, [0, 0.51, 0], [0.34, 0.26, 0.54]);
+        cylinder(0.13, 0.18, 0.46, primary, [0, 0.31, 0.18], [0.25, 0, 0]);
+        sphere(primary, [0.02, 0.71, 0.25], [0.19, 0.33, 0.22]);
+        sphere(primary, [0.02, 0.93, 0.3], [0.17, 0.18, 0.2]);
+        const muzzle = cylinder(0.085, 0.11, 0.24, primary, [0.02, 0.89, 0.43], [Math.PI / 2, 0, 0]);
+        muzzle.scale.set(0.88, 1, 0.88);
+        for (const x of [-0.13, 0.13]) {
+          for (const z of [-0.28, 0.27]) {
+            cylinder(0.055, 0.075, 0.36, darkAccent, [x, 0.26, z], [0, 0, x < 0 ? -0.07 : 0.07]);
+            cylinder(0.06, 0.06, 0.07, accent, [x, 0.09, z]);
+          }
+        }
+        sphere(brightAccent, [-0.04, 0.99, 0.33], [0.035, 0.035, 0.035]);
+        sphere(brightAccent, [0.04, 0.99, 0.33], [0.035, 0.035, 0.035]);
+        cylinder(0.035, 0.035, 0.32, accent, [0, 1.13, 0.02], [0, 0, -0.18]);
+        addAncientPieceMesh(root, new THREE.ConeGeometry(0.075, 0.18, 8), brightAccent, [-0.03, 1.32, 0.02]);
+        cylinder(0.18, 0.22, 0.12, primary, [0, 0.88, -0.07]);
+      } else if (type === 'queen') {
+        lathe([[0.1, 0.13], [0.27, 0.18], [0.26, 0.25], [0.2, 0.43], [0.15, 0.67], [0.12, 0.84]], primary);
+        lathe([[0.1, 0.17], [0.28, 0.19], [0.27, 0.24], [0.23, 0.27]], brightAccent);
+        sphere(primary, [0, 0.94, 0], [0.13, 0.16, 0.13]);
+        sphere(accent, [0, 1.08, 0], [0.18, 0.055, 0.18]);
+        for (let i = 0; i < 5; i++) {
+          const angle = Math.PI * 2 * i / 5;
+          cylinder(0.018, 0.018, 0.15, brightAccent, [Math.cos(angle) * 0.12, 1.17, Math.sin(angle) * 0.12]);
+          sphere(brightAccent, [Math.cos(angle) * 0.12, 1.25, Math.sin(angle) * 0.12], [0.035, 0.035, 0.035]);
+        }
+        sphere(brightAccent, [0, 1.28, 0], [0.055, 0.055, 0.055]);
+        cylinder(0.025, 0.025, 0.55, accent, [0.29, 0.63, 0], [0, 0, -0.08]);
+        sphere(brightAccent, [0.31, 0.96, 0], [0.075, 0.075, 0.075]);
+        for (const x of [-0.13, 0.13]) sphere(primary, [x, 0.79, 0], [0.14, 0.075, 0.13]);
+      } else if (type === 'king') {
+        lathe([[0.09, 0.13], [0.24, 0.17], [0.22, 0.24], [0.16, 0.38], [0.14, 0.63], [0.18, 0.72]], primary);
+        lathe([[0.1, 0.18], [0.25, 0.2], [0.23, 0.25], [0.17, 0.28]], brightAccent);
+        sphere(primary, [0, 0.83, 0], [0.14, 0.17, 0.14]);
+        cylinder(0.17, 0.19, 0.12, accent, [0, 0.97, 0]);
+        for (let i = 0; i < 4; i++) {
+          const angle = Math.PI * 2 * i / 4;
+          addAncientPieceMesh(root, new THREE.ConeGeometry(0.045, 0.15, 6), brightAccent,
+            [Math.cos(angle) * 0.12, 1.08, Math.sin(angle) * 0.12]);
+        }
+        cylinder(0.025, 0.03, 0.73, brightAccent, [0.28, 0.57, 0]);
+        sphere(brightAccent, [0.28, 0.98, 0], [0.105, 0.105, 0.105]);
+        cylinder(0.1, 0.1, 0.035, accent, [0.28, 0.98, 0], null, 12);
+        for (const x of [-0.14, 0.14]) sphere(primary, [x, 0.67, 0], [0.14, 0.08, 0.14]);
+      } else if (type === 'bishop') {
+        lathe([[0.1, 0.13], [0.23, 0.17], [0.2, 0.25], [0.15, 0.42], [0.14, 0.68], [0.19, 0.75]], primary);
+        sphere(primary, [0, 0.88, 0], [0.13, 0.15, 0.13]);
+        addAncientPieceMesh(root, new THREE.ConeGeometry(0.13, 0.28, 8), accent, [0, 1.08, 0]);
+        cylinder(0.035, 0.035, 0.92, brightAccent, [-0.28, 0.66, 0]);
+        addAncientPieceMesh(root, new THREE.ConeGeometry(0.075, 0.19, 8), brightAccent, [-0.28, 1.21, 0]);
+        addShield(0.25, 0.51, 0.1);
+        lathe([[0.12, 0.17], [0.25, 0.19], [0.23, 0.23], [0.14, 0.25]], brightAccent);
+      } else {
+        lathe([[0.1, 0.13], [0.23, 0.17], [0.21, 0.23], [0.16, 0.38], [0.13, 0.57]], primary);
+        sphere(primary, [0, 0.72, 0], [0.12, 0.14, 0.12]);
+        addAncientPieceMesh(root, new THREE.SphereGeometry(0.5, 16, 10), accent, [0, 0.81, 0], [0.16, 0.1, 0.16], [0.25, 0, 0]);
+        cylinder(0.025, 0.025, 0.48, brightAccent, [-0.24, 0.46, 0]);
+        addAncientPieceMesh(root, new THREE.ConeGeometry(0.08, 0.14, 8), brightAccent, [-0.24, 0.77, 0]);
+        addShield(0.24, 0.43, 0.08);
+      }
+
+      root.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      return root;
+    }
+
     function instantiatePiece(type, color, r, c) {
       const tpl = pieceTemplates[`${type}_${color}`];
       let root;
       let mixer = null;
       const actions = {};
 
-      if (tpl && tpl.scene) {
+      if (activePieceSet === 'ancient') {
+        root = createAncientPiece(type, color);
+      } else if (tpl && tpl.scene) {
         root = SkeletonUtils.clone(tpl.scene);
         const primaryMat = color === 'w' ? whitePieceMat : blackPieceMat;
         root.traverse((child) => {
@@ -1990,6 +2144,51 @@ export function initWizardChess() {
       }
       if (typeof updateScriptBarUI === 'function') updateScriptBarUI();
       maybeScheduleAIMove();
+    }
+
+    function setPieceSet(pieceSetId) {
+      if (!PIECE_SET_IDS.includes(pieceSetId)) {
+        console.warn(`Unknown chess piece set: ${pieceSetId}`);
+        return false;
+      }
+      if (pieceSetId === activePieceSet) return true;
+
+      completeCurrentMoveImmediately();
+      const previousPieceSet = activePieceSet;
+      activePieceSet = pieceSetId;
+      selectedSquare = null;
+      validMoves = [];
+      clearSquareHighlights();
+
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const piece = boardState[r][c];
+          if (!piece) continue;
+
+          if (piece.actions) {
+            for (const action of Object.values(piece.actions)) action.stop();
+          }
+          if (piece.mixer) {
+            const mixerIndex = activeMixers.indexOf(piece.mixer);
+            if (mixerIndex >= 0) activeMixers.splice(mixerIndex, 1);
+          }
+          if (piece.mesh) {
+            scene.remove(piece.mesh);
+            if (previousPieceSet === 'ancient') {
+              piece.mesh.traverse((child) => {
+                if (child.isMesh) child.geometry.dispose();
+              });
+            }
+          }
+
+          const replacement = instantiatePiece(piece.type, piece.color, r, c);
+          replacement.hasMoved = Boolean(piece.hasMoved);
+          boardState[r][c] = replacement;
+        }
+      }
+
+      renderer.shadowMap.needsUpdate = true;
+      return true;
     }
 
     // =========================================================================
@@ -4690,6 +4889,7 @@ export function initWizardChess() {
     // =========================================================================
     window.wizardChess = {
       setSceneTheme,
+      setPieceSet,
       setCameraPreset,
       setCameraPose,
       setCameraLook: setCameraPose,

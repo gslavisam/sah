@@ -14,6 +14,14 @@ export default function App() {
   const initializedRef = useRef(false);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [selectedPersona, setSelectedPersona] = useState<PersonaId>('mentor');
+  const [selectedPieceSet, setSelectedPieceSet] = useState<'wizard' | 'ancient'>(() => {
+    try {
+      return localStorage.getItem('wizard_chess_piece_set') === 'ancient' ? 'ancient' : 'wizard';
+    } catch (error) {
+      console.warn('Chess piece set preference could not be loaded.', error);
+      return 'wizard';
+    }
+  });
   const selectedPersonaRef = useRef<PersonaId>('mentor');
   const [aiMessage, setAiMessage] = useState(
     'Pozdrav, šegrte! Ja sam Alistair. Tu sam da te vodim i učinim svaki potez jasnim.'
@@ -55,8 +63,26 @@ export default function App() {
     if (initializedRef.current) return;
     initializedRef.current = true;
     initWizardChess();
+    const pieceSetWindow = window as Window & { wizardChess?: { setPieceSet?: (id: 'wizard' | 'ancient') => boolean } };
+    pieceSetWindow.wizardChess?.setPieceSet?.(selectedPieceSet);
     applySceneTheme(selectedPersonaRef.current);
   }, []);
+
+  const handleTogglePieceSet = () => {
+    const nextPieceSet = selectedPieceSet === 'wizard' ? 'ancient' : 'wizard';
+    const pieceSetWindow = window as Window & { wizardChess?: { setPieceSet?: (id: 'wizard' | 'ancient') => boolean } };
+    if (!pieceSetWindow.wizardChess?.setPieceSet?.(nextPieceSet)) {
+      console.warn(`Could not switch chess piece set to ${nextPieceSet}.`);
+      return;
+    }
+    setSelectedPieceSet(nextPieceSet);
+    try {
+      localStorage.setItem('wizard_chess_piece_set', nextPieceSet);
+    } catch (error) {
+      console.warn('Chess piece set preference could not be saved.', error);
+    }
+    setMobileSheetOpen(false);
+  };
 
   const handleUndoMove = async () => {
     const win = window as unknown as { wizardChess?: { undoPlayerMove?: () => boolean } };
@@ -411,6 +437,16 @@ export default function App() {
             }}
           >
             ✦ Šahovska akademija
+          </button>
+          <button
+            type="button"
+            className="hud-btn"
+            id="btn-piece-set"
+            title="Promeni izgled šahovskih figura"
+            aria-label={`Promeni set figura. Trenutni set: ${selectedPieceSet === 'wizard' ? 'Čarobnjački' : 'Antički'}`}
+            onClick={handleTogglePieceSet}
+          >
+            ♟ Set figura: {selectedPieceSet === 'wizard' ? 'Čarobnjački' : 'Antički'}
           </button>
           <button
             className="hud-btn"
