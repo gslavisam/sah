@@ -5,7 +5,7 @@
 ## Mogućnosti
 
 - 3D šahovska tabla, modelovane figure i animacije poteza i uzimanja figura.
-- Dva stila figura: postojeći čarobnjački GLB set i novi proceduralni antički set; izbor se čuva u pregledaču.
+- Tri stila figura: postojeći čarobnjački GLB set, proceduralni antički set i originalni proceduralni fantasy set „Zmajevi i vitezovi“; izbor se čuva u pregledaču.
 - Igra protiv lokalnog šahovskog protivnika; izbor igranja belim ili crnim figurama.
 - Četiri pogleda kamere: igrački, odozgo, bočni i široki pogled na katedralu.
 - Tri AI komentatora: Alistair (mentor), Grix (goblin) i Valerius (rival).
@@ -54,7 +54,7 @@ Vite ugrađuje ovu vrednost u JavaScript aplikacije u pregledaču. Zato nemoj ko
 - **Play as Black / Play as White** menja boju figura kojom igraš.
 - **AI Move** pokreće potez protivnika.
 - **New Game** započinje novu partiju.
-- **Set figura** menja čarobnjački i antički izgled figura bez resetovanja partije.
+- **Set figura** ciklično menja čarobnjački, antički i fantasy izgled bez resetovanja partije.
 - **Šahovska akademija** otvara četiri oblasti i 48 kratkih aktivnosti; kviz lekcije nude sledeću lekciju, a zagonetke koriste tablu i vraćaju prethodnu partiju pri izlasku.
 - **U** ili **Ctrl+Z** vraća prethodni potez.
 - Izaberi jedan od četiri dugmeta kamere za promenu ugla. Klik na već aktivan pogled menja orijentaciju.

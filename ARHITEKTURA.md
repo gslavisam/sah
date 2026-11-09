@@ -119,7 +119,7 @@ Potezi u Akademiji emituju odvojeni `wizardchess:academy-move` događaj. `App` k
 
 Modele engine traži prvo kao gzip-kompresovani Base64 GLB iz `./assets/glb/`, pa pokušava običan `.glb` fajl kao rezervu. Učitavanje se odvija pre postavljanja početne table i pokretanja animacione petlje.
 
-`setPieceSet('wizard' | 'ancient')` menja prikaz svih figura uživo bez menjanja polja, poteza ili istorije partije. Čarobnjački set koristi postojeće rigovane GLB modele; antički set gradi siluete hoplita, jahača, stub-topa, kralja i kraljice kroz Three.js geometriju i materijale. React čuva korisnikov izbor u `localStorage`.
+`setPieceSet('wizard' | 'ancient' | 'dragon')` menja prikaz svih figura uživo bez menjanja polja, poteza ili istorije partije. Čarobnjački set koristi postojeće rigovane GLB modele; antički set gradi siluete hoplita, jahača, stub-topa, kralja i kraljice, a „Zmajevi i vitezovi“ dodaje originalne proceduralne zmajeve, oklopljenog konjanika, krilatu kraljicu i tvrđavski top. React čuva korisnikov izbor u `localStorage`.
 
 `src/services/sceneThemes.ts` definiše identifikatore i palete, a `src/services/sceneEnvironments.ts` gradi tri grupe dekorativne geometrije: Alistairove armilarne sfere koje se polako okreću, Grixove zupčanike i nisko lebdeće varnice, odnosno Valeriusove heraldske zastave koje se blago njišu. `stepScene()` u `src/wizardChessEngine.js` ažurira samo trenutno vidljivu grupu; izbor teme ne dodaje nove objekte pri svakom izboru. Dekoracije ostaju van table i dopunjuju postojeću katedralu — nisu zamena za tri kompletna, zasebna okruženja.
 

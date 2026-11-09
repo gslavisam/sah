@@ -10,13 +10,24 @@ import { progressionService } from './services/progressionService';
 import type { SceneThemeId } from './services/sceneThemes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 
+type PieceSetId = 'wizard' | 'ancient' | 'dragon';
+
+const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon'];
+const PIECE_SET_NAMES: Record<PieceSetId, string> = {
+  wizard: 'Čarobnjački',
+  ancient: 'Antički',
+  dragon: 'Zmajevi i vitezovi'
+};
+
 export default function App() {
   const initializedRef = useRef(false);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [selectedPersona, setSelectedPersona] = useState<PersonaId>('mentor');
-  const [selectedPieceSet, setSelectedPieceSet] = useState<'wizard' | 'ancient'>(() => {
+  const [selectedPieceSet, setSelectedPieceSet] = useState<PieceSetId>(() => {
     try {
-      return localStorage.getItem('wizard_chess_piece_set') === 'ancient' ? 'ancient' : 'wizard';
+      const saved = localStorage.getItem('wizard_chess_piece_set');
+      if (saved === 'ancient' || saved === 'dragon' || saved === 'wizard') return saved;
+      return 'wizard';
     } catch (error) {
       console.warn('Chess piece set preference could not be loaded.', error);
       return 'wizard';
@@ -63,14 +74,15 @@ export default function App() {
     if (initializedRef.current) return;
     initializedRef.current = true;
     initWizardChess();
-    const pieceSetWindow = window as Window & { wizardChess?: { setPieceSet?: (id: 'wizard' | 'ancient') => boolean } };
+    const pieceSetWindow = window as Window & { wizardChess?: { setPieceSet?: (id: PieceSetId) => boolean } };
     pieceSetWindow.wizardChess?.setPieceSet?.(selectedPieceSet);
     applySceneTheme(selectedPersonaRef.current);
   }, []);
 
   const handleTogglePieceSet = () => {
-    const nextPieceSet = selectedPieceSet === 'wizard' ? 'ancient' : 'wizard';
-    const pieceSetWindow = window as Window & { wizardChess?: { setPieceSet?: (id: 'wizard' | 'ancient') => boolean } };
+    const currentIndex = PIECE_SET_ORDER.indexOf(selectedPieceSet);
+    const nextPieceSet = PIECE_SET_ORDER[(currentIndex + 1) % PIECE_SET_ORDER.length];
+    const pieceSetWindow = window as Window & { wizardChess?: { setPieceSet?: (id: PieceSetId) => boolean } };
     if (!pieceSetWindow.wizardChess?.setPieceSet?.(nextPieceSet)) {
       console.warn(`Could not switch chess piece set to ${nextPieceSet}.`);
       return;
@@ -443,10 +455,10 @@ export default function App() {
             className="hud-btn"
             id="btn-piece-set"
             title="Promeni izgled šahovskih figura"
-            aria-label={`Promeni set figura. Trenutni set: ${selectedPieceSet === 'wizard' ? 'Čarobnjački' : 'Antički'}`}
+            aria-label={`Promeni set figura. Trenutni set: ${PIECE_SET_NAMES[selectedPieceSet]}`}
             onClick={handleTogglePieceSet}
           >
-            ♟ Set figura: {selectedPieceSet === 'wizard' ? 'Čarobnjački' : 'Antički'}
+            ♟ Set figura: {PIECE_SET_NAMES[selectedPieceSet]}
           </button>
           <button
             className="hud-btn"

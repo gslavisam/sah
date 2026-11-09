@@ -45,15 +45,19 @@ test('Simplified Single-Player HUD in src/App.tsx excludes speed sliders, notati
   }
 });
 
-test('Ancient chess set can be selected without replacing the existing sculpted models', () => {
+test('Procedural chess sets are selectable without replacing the existing sculpted models', () => {
   const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
   const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
   assert.ok(appTsx.includes('wizard_chess_piece_set'), 'Piece set preference must persist locally');
-  assert.ok(engine.includes("PIECE_SET_IDS = ['wizard', 'ancient']"), 'Both piece set IDs must be supported');
+  assert.ok(engine.includes("PIECE_SET_IDS = ['wizard', 'ancient', 'dragon']"), 'All three piece set IDs must be supported');
   assert.ok(engine.includes('function createAncientPiece(type, color)'), 'Ancient pieces must be generated procedurally');
+  assert.ok(engine.includes('function createDragonPiece(type, color)'), 'Dragon and knight pieces must be generated procedurally');
   assert.ok(engine.includes('function setPieceSet(pieceSetId)'), 'Engine must support changing sets during a game');
   assert.ok(engine.includes('      setPieceSet,'), 'Piece set control must be exposed to the UI');
   assert.ok(engine.includes("activePieceSet === 'ancient'"), 'Existing GLB pieces must remain the default set');
+  assert.ok(engine.includes("activePieceSet === 'dragon'"), 'Fantasy set must be selectable');
+  assert.ok(engine.includes("previousPieceSet === 'ancient' || previousPieceSet === 'dragon'"), 'Procedural geometries must be disposed when leaving either generated set');
+  assert.ok(appTsx.includes("dragon: 'Zmajevi i vitezovi'"), 'Fantasy set must have a localized name');
 });
 
 test('All 7 compressed 3D assets (.glb.gz.b64) decode and gunzip to valid glTF 2.0 binary models', () => {

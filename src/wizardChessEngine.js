@@ -15,7 +15,7 @@ export function initWizardChess() {
     // =========================================================================
     const PIECE_TYPES = ['pawn', 'rook', 'knight', 'bishop', 'queen', 'king'];
     const PIECE_VALUES = { pawn: 100, knight: 320, bishop: 330, rook: 500, queen: 900, king: 20000 };
-    const PIECE_SET_IDS = ['wizard', 'ancient'];
+    const PIECE_SET_IDS = ['wizard', 'ancient', 'dragon'];
     const BOARD_SQ_SIZE = 0.34;
     const BOARD_SURFACE_Y = 0.775;
 
@@ -925,7 +925,11 @@ export function initWizardChess() {
     const pieceSetMaterials = {
       bronze: new THREE.MeshStandardMaterial({ color: 0x9b713a, roughness: 0.34, metalness: 0.76 }),
       gold: new THREE.MeshStandardMaterial({ color: 0xd4af67, roughness: 0.28, metalness: 0.82 }),
-      darkBronze: new THREE.MeshStandardMaterial({ color: 0x4c3928, roughness: 0.4, metalness: 0.68 })
+      darkBronze: new THREE.MeshStandardMaterial({ color: 0x4c3928, roughness: 0.4, metalness: 0.68 }),
+      dragonScale: new THREE.MeshStandardMaterial({ color: 0x28685b, roughness: 0.3, metalness: 0.48 }),
+      dragonAccent: new THREE.MeshStandardMaterial({ color: 0x51b59a, roughness: 0.26, metalness: 0.55 }),
+      dragonDark: new THREE.MeshStandardMaterial({ color: 0x183932, roughness: 0.38, metalness: 0.42 }),
+      dragonGold: new THREE.MeshStandardMaterial({ color: 0xd19a48, roughness: 0.3, metalness: 0.8 })
     };
 
     const boardGroup = new THREE.Group();
@@ -1757,6 +1761,159 @@ export function initWizardChess() {
       return root;
     }
 
+    function createDragonPiece(type, color) {
+      const root = new THREE.Group();
+      const primary = color === 'w' ? whitePieceMat : blackPieceMat;
+      const scaleMat = pieceSetMaterials.dragonScale;
+      const accentMat = pieceSetMaterials.dragonAccent;
+      const darkMat = pieceSetMaterials.dragonDark;
+      const goldMat = pieceSetMaterials.dragonGold;
+      const lathe = (points, material) =>
+        addAncientPieceMesh(
+          root,
+          new THREE.LatheGeometry(points.map(([x, y]) => new THREE.Vector2(x, y)), 20),
+          material,
+          [0, 0, 0]
+        );
+      const sphere = (material, position, scale, rotation = null) =>
+        addAncientPieceMesh(root, new THREE.SphereGeometry(0.5, 16, 12), material, position, scale, rotation);
+      const cylinder = (top, bottom, height, material, position, rotation = null, segments = 16) =>
+        addAncientPieceMesh(root, new THREE.CylinderGeometry(top, bottom, height, segments), material, position, null, rotation);
+      const cone = (radius, height, material, position, rotation = null, segments = 12) =>
+        addAncientPieceMesh(root, new THREE.ConeGeometry(radius, height, segments), material, position, null, rotation);
+      const box = (material, position, scale, rotation = null) =>
+        addAncientPieceMesh(root, new THREE.BoxGeometry(1, 1, 1), material, position, scale, rotation);
+      const base = () =>
+        lathe([[0.08, 0.015], [0.34, 0.015], [0.37, 0.055], [0.33, 0.095], [0.2, 0.13], [0.09, 0.15]], goldMat);
+      const addWing = (side, y, z, size = 1) => {
+        const wing = new THREE.Shape();
+        wing.moveTo(0, 0);
+        wing.quadraticCurveTo(side * 0.11, 0.19 * size, side * 0.43 * size, 0.27 * size);
+        wing.quadraticCurveTo(side * 0.4 * size, 0.02, side * 0.36 * size, -0.13 * size);
+        wing.quadraticCurveTo(side * 0.21 * size, -0.02, side * 0.13 * size, -0.18 * size);
+        wing.quadraticCurveTo(side * 0.07, -0.05, 0, 0);
+        const mesh = addAncientPieceMesh(
+          root,
+          new THREE.ShapeGeometry(wing, 8),
+          accentMat,
+          [0, y, z],
+          null,
+          [0, side > 0 ? 0.13 : -0.13, 0]
+        );
+        mesh.material.side = THREE.DoubleSide;
+        const ribs = [
+          [0.19, 0.08],
+          [0.31, 0.15],
+          [0.31, -0.07]
+        ];
+        for (const [dx, dy] of ribs) {
+          const rib = cylinder(0.012, 0.018, Math.hypot(dx * size, dy * size), goldMat,
+            [side * dx * size / 2, y + dy * size / 2, z - 0.012],
+            [0, 0, -Math.atan2(dy, dx) * side], 6);
+          rib.scale.z = 1;
+        }
+      };
+      const addHorns = (y, z, width = 0.14) => {
+        for (const side of [-1, 1]) {
+          cone(0.055, 0.19, goldMat, [side * width, y + 0.1, z - 0.015], [0, 0, side * -0.28]);
+        }
+      };
+
+      base();
+      if (type === 'pawn') {
+        sphere(scaleMat, [0, 0.42, 0], [0.25, 0.22, 0.32]);
+        sphere(scaleMat, [0, 0.62, 0.12], [0.2, 0.19, 0.2]);
+        sphere(primary, [0, 0.64, 0.27], [0.16, 0.105, 0.13]);
+        sphere(goldMat, [-0.07, 0.69, 0.35], [0.035, 0.035, 0.035]);
+        sphere(goldMat, [0.07, 0.69, 0.35], [0.035, 0.035, 0.035]);
+        addHorns(0.72, 0.1, 0.12);
+        addWing(-1, 0.5, -0.08, 0.55);
+        addWing(1, 0.5, -0.08, 0.55);
+        for (let i = 0; i < 3; i++) {
+          sphere(accentMat, [0, 0.34 - i * 0.08, -0.26 - i * 0.085], [0.09 - i * 0.014, 0.075 - i * 0.01, 0.11]);
+        }
+        cone(0.04, 0.16, goldMat, [0, 0.19, -0.48], [Math.PI / 2, 0, 0]);
+      } else if (type === 'rook') {
+        lathe([[0.1, 0.13], [0.22, 0.16], [0.2, 0.23], [0.16, 0.3], [0.22, 0.36], [0.24, 0.43],
+          [0.21, 0.49], [0.21, 0.91], [0.27, 0.97], [0.29, 1.03], [0.24, 1.09], [0.1, 1.12]], primary);
+        lathe([[0.21, 0.4], [0.25, 0.43], [0.25, 0.47], [0.21, 0.5]], goldMat);
+        lathe([[0.21, 0.88], [0.29, 0.92], [0.3, 0.97], [0.25, 1.0]], goldMat);
+        for (let i = 0; i < 8; i++) {
+          const angle = i * Math.PI / 4;
+          cylinder(0.025, 0.025, 0.49, scaleMat, [Math.cos(angle) * 0.205, 0.68, Math.sin(angle) * 0.205], null, 8);
+        }
+        for (let i = 0; i < 6; i++) {
+          const angle = i * Math.PI / 3;
+          const crenel = box(goldMat, [Math.cos(angle) * 0.23, 1.13, Math.sin(angle) * 0.23], [0.12, 0.16, 0.12]);
+          crenel.rotation.y = -angle;
+        }
+        for (const side of [-1, 1]) {
+          sphere(scaleMat, [side * 0.12, 0.83, 0.14], [0.09, 0.055, 0.13]);
+          cone(0.065, 0.18, goldMat, [side * 0.13, 0.89, 0.2], [0, 0, side * -0.35]);
+        }
+      } else if (type === 'knight') {
+        sphere(darkMat, [0, 0.48, -0.02], [0.23, 0.24, 0.36]);
+        sphere(darkMat, [0, 0.69, 0.22], [0.16, 0.29, 0.2]);
+        sphere(darkMat, [0, 0.91, 0.26], [0.15, 0.16, 0.17]);
+        sphere(primary, [0, 0.88, 0.38], [0.13, 0.085, 0.14]);
+        for (const side of [-1, 1]) {
+          cylinder(0.05, 0.07, 0.32, darkMat, [side * 0.15, 0.24, -0.1], [0, 0, side * -0.08]);
+          cylinder(0.05, 0.07, 0.3, darkMat, [side * 0.15, 0.24, 0.17], [0, 0, side * -0.08]);
+          sphere(goldMat, [side * 0.065, 0.95, 0.36], [0.025, 0.025, 0.025]);
+          addWing(side, 0.66, -0.12, 0.63);
+        }
+        addHorns(0.99, 0.18, 0.11);
+        cylinder(0.025, 0.035, 0.62, goldMat, [0.27, 0.53, 0.04], [0, 0, -0.08]);
+        cone(0.065, 0.18, goldMat, [0.29, 0.92, 0.04]);
+        cylinder(0.16, 0.19, 0.08, scaleMat, [0, 0.78, -0.02]);
+      } else if (type === 'bishop') {
+        lathe([[0.1, 0.14], [0.23, 0.18], [0.21, 0.25], [0.16, 0.43], [0.14, 0.67], [0.2, 0.76]], primary);
+        sphere(darkMat, [0, 0.86, 0], [0.16, 0.17, 0.16]);
+        cone(0.15, 0.25, scaleMat, [0, 1.02, 0]);
+        addHorns(1.09, -0.02, 0.13);
+        addWing(-1, 0.65, -0.12, 0.58);
+        addWing(1, 0.65, -0.12, 0.58);
+        cylinder(0.026, 0.03, 0.9, goldMat, [-0.3, 0.63, 0]);
+        sphere(goldMat, [-0.3, 1.12, 0], [0.08, 0.08, 0.08]);
+        for (const side of [-1, 1]) sphere(scaleMat, [side * 0.19, 0.48, 0.12], [0.08, 0.2, 0.08]);
+      } else if (type === 'queen') {
+        lathe([[0.1, 0.14], [0.25, 0.18], [0.23, 0.26], [0.17, 0.46], [0.14, 0.73], [0.2, 0.81]], primary);
+        sphere(scaleMat, [0, 0.9, 0], [0.15, 0.16, 0.15]);
+        sphere(primary, [0, 1.03, 0.02], [0.1, 0.12, 0.1]);
+        for (const side of [-1, 1]) {
+          addWing(side, 0.85, -0.14, 0.92);
+          cone(0.055, 0.2, goldMat, [side * 0.11, 1.12, -0.01], [0, 0, side * -0.25]);
+          sphere(scaleMat, [side * 0.14, 0.64, 0.03], [0.13, 0.07, 0.14]);
+        }
+        cylinder(0.025, 0.03, 0.52, goldMat, [0.28, 0.65, 0]);
+        sphere(goldMat, [0.28, 0.95, 0], [0.1, 0.1, 0.1]);
+        for (let i = 0; i < 5; i++) {
+          const angle = i * Math.PI * 2 / 5;
+          cone(0.035, 0.14, goldMat, [Math.cos(angle) * 0.13, 1.22, Math.sin(angle) * 0.13]);
+        }
+      } else {
+        lathe([[0.1, 0.14], [0.26, 0.18], [0.23, 0.26], [0.18, 0.45], [0.15, 0.7], [0.21, 0.79]], primary);
+        sphere(darkMat, [0, 0.87, 0], [0.18, 0.18, 0.17]);
+        sphere(primary, [0, 0.94, 0.08], [0.14, 0.11, 0.14]);
+        addHorns(0.96, -0.03, 0.17);
+        addWing(-1, 0.82, -0.18, 0.82);
+        addWing(1, 0.82, -0.18, 0.82);
+        cylinder(0.16, 0.19, 0.1, goldMat, [0, 1.02, 0]);
+        cone(0.055, 0.18, goldMat, [0, 1.15, 0]);
+        cylinder(0.028, 0.035, 0.76, goldMat, [0.29, 0.58, 0], [0, 0, -0.08]);
+        cone(0.065, 0.22, goldMat, [0.33, 1.0, 0]);
+        box(scaleMat, [-0.16, 0.68, 0.1], [0.23, 0.3, 0.06], [0, 0, 0.12]);
+      }
+
+      root.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      return root;
+    }
+
     function instantiatePiece(type, color, r, c) {
       const tpl = pieceTemplates[`${type}_${color}`];
       let root;
@@ -1765,6 +1922,8 @@ export function initWizardChess() {
 
       if (activePieceSet === 'ancient') {
         root = createAncientPiece(type, color);
+      } else if (activePieceSet === 'dragon') {
+        root = createDragonPiece(type, color);
       } else if (tpl && tpl.scene) {
         root = SkeletonUtils.clone(tpl.scene);
         const primaryMat = color === 'w' ? whitePieceMat : blackPieceMat;
@@ -2174,7 +2333,7 @@ export function initWizardChess() {
           }
           if (piece.mesh) {
             scene.remove(piece.mesh);
-            if (previousPieceSet === 'ancient') {
+            if (previousPieceSet === 'ancient' || previousPieceSet === 'dragon') {
               piece.mesh.traverse((child) => {
                 if (child.isMesh) child.geometry.dispose();
               });
