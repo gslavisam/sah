@@ -15,8 +15,16 @@ export function initWizardChess() {
     // =========================================================================
     const PIECE_TYPES = ['pawn', 'rook', 'knight', 'bishop', 'queen', 'king'];
     const PIECE_VALUES = { pawn: 100, knight: 320, bishop: 330, rook: 500, queen: 900, king: 20000 };
-    const PIECE_SET_IDS = ['wizard', 'ancient', 'dragon'];
+    const PIECE_SET_IDS = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski'];
     const BOARD_SQ_SIZE = 0.34;
+    const BOARD_FIT_PIECE_HEIGHTS = {
+      pawn: BOARD_SQ_SIZE * 1.1,
+      rook: BOARD_SQ_SIZE * 1.45 * 0.75,
+      knight: BOARD_SQ_SIZE * 1.65 * 0.75,
+      bishop: BOARD_SQ_SIZE * 1.75 * 0.75,
+      queen: BOARD_SQ_SIZE * 1.95 * 0.75,
+      king: BOARD_SQ_SIZE * 2.15 * 0.75
+    };
     const BOARD_SURFACE_Y = 0.775;
 
     function boardToWorld(r, c) {
@@ -918,10 +926,37 @@ export function initWizardChess() {
     // =========================================================================
     const gltfLoader = new GLTFLoader();
     const pieceTemplates = {};
+    const vitezPieceTemplates = {};
+    const srpskiPieceTemplates = {};
     const activeMixers = [];
     const shatterDebris = [];
     const clock = new THREE.Clock();
     let activePieceSet = 'wizard';
+    const stoneTextureSize = 128;
+    const stoneTextureData = new Uint8Array(stoneTextureSize * stoneTextureSize * 4);
+    for (let y = 0; y < stoneTextureSize; y++) {
+      for (let x = 0; x < stoneTextureSize; x++) {
+        const index = (y * stoneTextureSize + x) * 4;
+        const broadGrain = Math.sin(x * 0.17 + Math.sin(y * 0.09)) * 5 + Math.sin(y * 0.31) * 3;
+        const noise = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+        const fineGrain = (noise - Math.floor(noise)) * 22 - 11;
+        const value = Math.max(0, Math.min(255, Math.round(224 + broadGrain + fineGrain)));
+        stoneTextureData[index] = value;
+        stoneTextureData[index + 1] = value;
+        stoneTextureData[index + 2] = value;
+        stoneTextureData[index + 3] = 255;
+      }
+    }
+    const medievalStoneTexture = new THREE.DataTexture(
+      stoneTextureData,
+      stoneTextureSize,
+      stoneTextureSize,
+      THREE.RGBAFormat
+    );
+    medievalStoneTexture.wrapS = THREE.RepeatWrapping;
+    medievalStoneTexture.wrapT = THREE.RepeatWrapping;
+    medievalStoneTexture.repeat.set(2, 2);
+    medievalStoneTexture.needsUpdate = true;
     const pieceSetMaterials = {
       bronze: new THREE.MeshStandardMaterial({ color: 0x9b713a, roughness: 0.34, metalness: 0.76 }),
       gold: new THREE.MeshStandardMaterial({ color: 0xd4af67, roughness: 0.28, metalness: 0.82 }),
@@ -931,7 +966,27 @@ export function initWizardChess() {
       dragonDark: new THREE.MeshStandardMaterial({ color: 0x183932, roughness: 0.38, metalness: 0.42 }),
       dragonGold: new THREE.MeshStandardMaterial({ color: 0xd19a48, roughness: 0.3, metalness: 0.8 }),
       dragonPawnMarkWhite: new THREE.MeshBasicMaterial({ color: 0xe6dfd0, side: THREE.DoubleSide }),
-      dragonPawnMarkBlack: new THREE.MeshBasicMaterial({ color: 0x111318, side: THREE.DoubleSide })
+      dragonPawnMarkBlack: new THREE.MeshBasicMaterial({ color: 0x111318, side: THREE.DoubleSide }),
+      medievalWhiteStone: new THREE.MeshStandardMaterial({
+        color: 0xe9e3d6,
+        map: medievalStoneTexture,
+        bumpMap: medievalStoneTexture,
+        bumpScale: 0.012,
+        roughness: 0.76,
+        metalness: 0.025
+      }),
+      medievalBlackStone: new THREE.MeshStandardMaterial({
+        color: 0x454950,
+        map: medievalStoneTexture,
+        bumpMap: medievalStoneTexture,
+        bumpScale: 0.014,
+        roughness: 0.74,
+        metalness: 0.035
+      }),
+      medievalIron: new THREE.MeshStandardMaterial({ color: 0x59616a, roughness: 0.32, metalness: 0.58 }),
+      medievalBlackIron: new THREE.MeshStandardMaterial({ color: 0x30343a, roughness: 0.4, metalness: 0.52 }),
+      medievalLeather: new THREE.MeshStandardMaterial({ color: 0x59402f, roughness: 0.72, metalness: 0.04 }),
+      medievalSkin: new THREE.MeshStandardMaterial({ color: 0xb98568, roughness: 0.9, metalness: 0 })
     };
 
     const boardGroup = new THREE.Group();
@@ -1263,7 +1318,7 @@ export function initWizardChess() {
     async function loadAllAssets() {
       const loaderBar = document.getElementById('loader-bar');
       const loaderText = document.getElementById('loader-text');
-      const totalItems = PIECE_TYPES.length + 1;
+      const totalItems = PIECE_TYPES.length * 5 + 1;
 
       async function loadGltfModel(baseName) {
         let arrayBuffer = null;
@@ -1534,6 +1589,31 @@ export function initWizardChess() {
         });
       }
 
+      const boardFitModels = [];
+      for (const [setId, templates] of [['vitez', vitezPieceTemplates], ['srpski', srpskiPieceTemplates]]) {
+        for (const type of PIECE_TYPES) {
+          for (const color of ['w', 'b']) {
+            const folder = color === 'w' ? 'bele' : 'crne';
+            boardFitModels.push(
+              loadGltfModel(`${setId}/${folder}/medieval_${type}`).then(
+                (gltf) => {
+                  templates[`${type}_${color}`] = {
+                    scene: gltf.scene,
+                    animations: gltf.animations || []
+                  };
+                  bumpProgress(`Loaded ${setId} ${color === 'w' ? 'white' : 'black'} ${type}...`);
+                },
+                (err) => {
+                  console.warn(`${setId} piece load warning (${color}_${type}):`, err);
+                  bumpProgress(`Loaded ${setId} ${color === 'w' ? 'white' : 'black'} ${type}`);
+                }
+              )
+            );
+          }
+        }
+      }
+      await Promise.all(boardFitModels);
+
       document.getElementById('loading-overlay')?.classList.add('hidden');
     }
 
@@ -1656,6 +1736,37 @@ export function initWizardChess() {
         addAncientPieceMesh(root, new THREE.SphereGeometry(0.5, 16, 12), material, position, scale);
       const box = (material, position, scale, rotation = null) =>
         addAncientPieceMesh(root, new THREE.BoxGeometry(1, 1, 1), material, position, scale, rotation);
+      const tube = (points, radius, material, segments = 20) => {
+        const curve = new THREE.CatmullRomCurve3(points.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
+        return addAncientPieceMesh(root, new THREE.TubeGeometry(curve, segments, radius, 6, false), material, [0, 0, 0]);
+      };
+      const limb = (start, end, radius, material, endRadius = radius, segments = 12) => {
+        const a = new THREE.Vector3(...start);
+        const b = new THREE.Vector3(...end);
+        const direction = new THREE.Vector3().subVectors(b, a);
+        const mesh = cylinder(endRadius, radius, direction.length(), material, a.clone().add(b).multiplyScalar(0.5).toArray(), null, segments);
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+        return mesh;
+      };
+      const addFace = (y, z, scale = 1) => {
+        sphere(stone, [0, y, z], [0.105 * scale, 0.145 * scale, 0.09 * scale]);
+        sphere(iron, [-0.043 * scale, y + 0.018 * scale, z + 0.078 * scale], [0.018 * scale, 0.012 * scale, 0.012 * scale]);
+        sphere(iron, [0.043 * scale, y + 0.018 * scale, z + 0.078 * scale], [0.018 * scale, 0.012 * scale, 0.012 * scale]);
+        sphere(stone, [0, y - 0.012 * scale, z + 0.091 * scale], [0.018 * scale, 0.032 * scale, 0.024 * scale]);
+        tube([[-0.06 * scale, y - 0.055 * scale, z + 0.068 * scale], [0, y - 0.07 * scale, z + 0.085 * scale], [0.06 * scale, y - 0.055 * scale, z + 0.068 * scale]], 0.008 * scale, iron, 8);
+      };
+      const addRobeFolds = (yTop, yBottom, radius, count = 9) => {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.PI * 2 * i / count;
+          const x = Math.sin(angle);
+          const z = Math.cos(angle);
+          tube([
+            [x * radius * 0.72, yTop, z * radius * 0.72],
+            [x * radius * 0.9, (yTop + yBottom) * 0.58, z * radius * 0.9],
+            [x * radius, yBottom, z * radius]
+          ], 0.009, iron, 10);
+        }
+      };
       const base = () =>
         lathe(
           [[0.08, 0.015], [0.34, 0.015], [0.37, 0.055], [0.34, 0.09], [0.24, 0.12], [0.1, 0.14]],
@@ -1930,8 +2041,231 @@ export function initWizardChess() {
       return root;
     }
 
+    function createMedievalPiece(type, color) {
+      const root = new THREE.Group();
+      const stone = color === 'w' ? pieceSetMaterials.medievalWhiteStone : pieceSetMaterials.medievalBlackStone;
+      const iron = color === 'w' ? pieceSetMaterials.medievalIron : pieceSetMaterials.medievalBlackIron;
+      const leather = pieceSetMaterials.medievalLeather;
+      const skin = color === 'w' ? pieceSetMaterials.medievalSkin : stone;
+      const gold = goldTrimMat;
+      const lathe = (points, material = stone) =>
+        addAncientPieceMesh(
+          root,
+          new THREE.LatheGeometry(points.map(([x, y]) => new THREE.Vector2(x, y)), 48),
+          material,
+          [0, 0, 0]
+        );
+      const sphere = (material, position, scale, rotation = null) =>
+        addAncientPieceMesh(root, new THREE.SphereGeometry(0.5, 32, 24), material, position, scale, rotation);
+      const cylinder = (top, bottom, height, material, position, rotation = null, segments = 16) =>
+        addAncientPieceMesh(root, new THREE.CylinderGeometry(top, bottom, height, segments), material, position, null, rotation);
+      const cone = (radius, height, material, position, rotation = null, segments = 12) =>
+        addAncientPieceMesh(root, new THREE.ConeGeometry(radius, height, segments), material, position, null, rotation);
+      const box = (material, position, scale, rotation = null) =>
+        addAncientPieceMesh(root, new THREE.BoxGeometry(1, 1, 1), material, position, scale, rotation);
+      const tube = (points, radius, material, segments = 20) => {
+        const curve = new THREE.CatmullRomCurve3(points.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
+        return addAncientPieceMesh(root, new THREE.TubeGeometry(curve, segments, radius, 6, false), material, [0, 0, 0]);
+      };
+      const limb = (start, end, radius, material, endRadius = radius) => {
+        const a = new THREE.Vector3(...start);
+        const b = new THREE.Vector3(...end);
+        const direction = new THREE.Vector3().subVectors(b, a);
+        const mesh = cylinder(endRadius, radius, direction.length(), material, a.clone().add(b).multiplyScalar(0.5).toArray());
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+        return mesh;
+      };
+      const addFace = (y, z, scale = 1) => {
+        sphere(skin, [0, y, z], [0.105 * scale, 0.145 * scale, 0.09 * scale]);
+        sphere(iron, [-0.043 * scale, y + 0.018 * scale, z + 0.078 * scale], [0.018 * scale, 0.012 * scale, 0.012 * scale]);
+        sphere(iron, [0.043 * scale, y + 0.018 * scale, z + 0.078 * scale], [0.018 * scale, 0.012 * scale, 0.012 * scale]);
+        sphere(skin, [0, y - 0.012 * scale, z + 0.091 * scale], [0.018 * scale, 0.032 * scale, 0.024 * scale]);
+        tube([[-0.06 * scale, y - 0.055 * scale, z + 0.068 * scale], [0, y - 0.07 * scale, z + 0.085 * scale], [0.06 * scale, y - 0.055 * scale, z + 0.068 * scale]], 0.008 * scale, iron, 8);
+      };
+      const addRobeFolds = (yTop, yBottom, radius, count = 9) => {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.PI * 2 * i / count;
+          const x = Math.sin(angle);
+          const z = Math.cos(angle);
+          tube([
+            [x * radius * 0.72, yTop, z * radius * 0.72],
+            [x * radius * 0.9, (yTop + yBottom) * 0.58, z * radius * 0.9],
+            [x * radius, yBottom, z * radius]
+          ], 0.009, iron, 10);
+        }
+      };
+
+      lathe([[0.08, 0.015], [0.34, 0.015], [0.37, 0.055], [0.33, 0.1], [0.2, 0.14], [0.09, 0.16]], stone);
+      lathe([[0.28, 0.055], [0.35, 0.07], [0.35, 0.105], [0.28, 0.12]], iron);
+
+      if (type === 'rook') {
+        lathe([[0.12, 0.13], [0.23, 0.18], [0.2, 0.25], [0.17, 0.32], [0.21, 0.38],
+          [0.22, 0.43], [0.18, 0.47], [0.18, 0.98], [0.28, 1.03], [0.3, 1.1],
+          [0.26, 1.15], [0.1, 1.17]], stone);
+        lathe([[0.19, 0.44], [0.23, 0.46], [0.23, 0.5], [0.18, 0.52]], iron);
+        lathe([[0.22, 0.98], [0.3, 1.02], [0.31, 1.08], [0.26, 1.11]], gold);
+        for (let turn = 0; turn < 3; turn++) {
+          const points = [];
+          for (let step = 0; step <= 28; step++) {
+            const t = step / 28;
+            const angle = turn * Math.PI * 2 + t * Math.PI * 2;
+            points.push([Math.cos(angle) * 0.185, 0.52 + t * 0.41, Math.sin(angle) * 0.185]);
+          }
+          tube(points, 0.012, iron, 36);
+        }
+        for (let i = 0; i < 8; i++) {
+          const angle = i * Math.PI / 4;
+          box(stone, [Math.cos(angle) * 0.22, 1.19, Math.sin(angle) * 0.22], [0.12, 0.16, 0.12]);
+        }
+        box(leather, [0, 0.72, 0.184], [0.12, 0.27, 0.025]);
+        box(iron, [0, 0.73, 0.205], [0.075, 0.21, 0.018]);
+        for (const y of [0.66, 0.73, 0.8]) sphere(gold, [0, y, 0.22], [0.018, 0.018, 0.012]);
+        const windowArch = [];
+        for (let i = 0; i <= 12; i++) {
+          const angle = Math.PI * i / 12;
+          windowArch.push([Math.cos(angle) * 0.055, 0.88 + Math.sin(angle) * 0.07, 0.2]);
+        }
+        tube(windowArch, 0.009, gold, 16);
+      } else if (type === 'knight') {
+        sphere(leather, [0, 0.52, -0.05], [0.25, 0.24, 0.39]);
+        sphere(stone, [0, 0.7, 0.2], [0.14, 0.23, 0.19], [-0.42, 0, 0]);
+        sphere(stone, [0, 0.83, 0.34], [0.13, 0.15, 0.18]);
+        sphere(stone, [0, 0.79, 0.47], [0.095, 0.075, 0.14]);
+        sphere(iron, [0, 0.9, 0.37], [0.14, 0.1, 0.12]);
+        for (let i = -2; i <= 2; i++) {
+          tube([[i * 0.035, 0.93, 0.4], [i * 0.045, 1.02 - Math.abs(i) * 0.012, 0.35], [i * 0.05, 0.95, 0.3]], 0.014, iron, 10);
+        }
+        for (const x of [-0.15, 0.15]) {
+          limb([x, 0.39, -0.05], [x * 1.12, 0.23, -0.2], 0.065, stone, 0.045);
+          limb([x * 1.12, 0.23, -0.2], [x * 1.15, 0.16, -0.33], 0.04, iron, 0.035);
+          limb([x * 0.9, 0.4, 0.05], [x * 0.8, 0.22, 0.22], 0.06, stone, 0.045);
+          limb([x * 0.8, 0.22, 0.22], [x * 0.82, 0.16, 0.34], 0.04, iron, 0.035);
+        }
+        for (const side of [-1, 1]) {
+          sphere(iron, [side * 0.14, 0.51, 0.04], [0.055, 0.065, 0.29]);
+          sphere(gold, [side * 0.14, 0.51, 0.26], [0.018, 0.018, 0.018]);
+        }
+        tube([[0, 0.58, -0.38], [0, 0.49, -0.5], [0.02, 0.39, -0.53]], 0.035, leather, 12);
+        sphere(iron, [0, 0.99, -0.05], [0.13, 0.2, 0.14]);
+        sphere(stone, [0, 1.12, -0.03], [0.12, 0.13, 0.12]);
+        cylinder(0.13, 0.13, 0.045, gold, [0, 1.19, -0.03]);
+        cone(0.105, 0.17, iron, [0, 1.29, -0.03]);
+        limb([-0.1, 1.15, -0.03], [-0.1, 1.31, -0.03], 0.015, gold);
+        box(stone, [0.2, 0.82, 0.08], [0.07, 0.3, 0.23], [0, 0, -0.1]);
+        for (let i = 0; i < 3; i++) sphere(gold, [0.2, 0.9 - i * 0.07, 0.2], [0.018, 0.018, 0.012]);
+        limb([-0.2, 0.7, 0.04], [-0.24, 0.61, 0.18], 0.035, iron, 0.025);
+        limb([0.2, 0.7, 0.04], [0.2, 0.59, 0.2], 0.035, iron, 0.025);
+        limb([0.2, 0.59, 0.2], [0.04, 0.73, 0.03], 0.026, iron, 0.02);
+        cylinder(0.014, 0.02, 0.65, iron, [-0.24, 0.98, 0.15], [0, 0, -0.04]);
+        cone(0.045, 0.16, iron, [-0.24, 1.39, 0.15]);
+      } else if (type === 'pawn') {
+        lathe([[0.11, 0.15], [0.23, 0.2], [0.2, 0.28], [0.16, 0.38], [0.12, 0.59]], stone);
+        limb([-0.075, 0.43, 0], [-0.085, 0.19, 0.02], 0.055, iron, 0.04);
+        limb([0.075, 0.43, 0], [0.085, 0.19, 0.02], 0.055, iron, 0.04);
+        for (const x of [-0.085, 0.085]) {
+          sphere(leather, [x, 0.14, 0.08], [0.065, 0.045, 0.12]);
+          cylinder(0.062, 0.066, 0.035, gold, [x, 0.14, 0.08]);
+        }
+        sphere(leather, [0, 0.58, 0], [0.14, 0.17, 0.1]);
+        lathe([[0.1, 0.39], [0.18, 0.44], [0.17, 0.52], [0.13, 0.66], [0.12, 0.72]], iron);
+        box(stone, [0, 0.56, 0.096], [0.18, 0.16, 0.025]);
+        for (const side of [-1, 1]) {
+          sphere(iron, [side * 0.14, 0.59, 0], [0.055, 0.065, 0.07]);
+          limb([side * 0.14, 0.6, 0], [side * 0.18, 0.44, 0.06], 0.045, stone, 0.035);
+          limb([side * 0.18, 0.44, 0.06], [side * 0.14, 0.36, 0.14], 0.032, iron, 0.025);
+          sphere(iron, [side * 0.14, 0.36, 0.14], [0.04, 0.04, 0.04]);
+        }
+        addFace(0.78, 0.02, 0.78);
+        sphere(iron, [0, 0.81, -0.015], [0.135, 0.12, 0.14]);
+        cylinder(0.14, 0.15, 0.035, gold, [0, 0.84, 0]);
+        cone(0.145, 0.19, iron, [0, 0.94, 0]);
+        box(stone, [0.19, 0.54, 0.13], [0.085, 0.25, 0.22], [0, 0, -0.12]);
+        cylinder(0.018, 0.023, 0.76, iron, [-0.25, 0.53, 0.04], [0, 0, -0.035]);
+        cone(0.045, 0.14, iron, [-0.25, 0.98, 0.04]);
+        for (let i = 0; i < 3; i++) sphere(gold, [0.19, 0.62 - i * 0.07, 0.25], [0.018, 0.018, 0.012]);
+        tube([[-0.06, 0.4, 0.1], [0, 0.35, 0.15], [0.06, 0.4, 0.1]], 0.012, gold, 8);
+      } else if (type === 'bishop') {
+        lathe([[0.1, 0.15], [0.24, 0.19], [0.21, 0.28], [0.17, 0.43], [0.14, 0.75]], stone);
+        lathe([[0.15, 0.43], [0.18, 0.46], [0.17, 0.5]], gold);
+        addRobeFolds(0.7, 0.18, 0.19, 11);
+        sphere(stone, [0, 0.85, 0], [0.14, 0.14, 0.13]);
+        addFace(0.88, 0.07, 0.78);
+        lathe([[0.11, 0.92], [0.15, 0.98], [0.14, 1.02], [0.19, 1.25], [0.15, 1.3], [0.06, 1.32]], iron);
+        tube([[-0.15, 1.0, 0.02], [0, 1.31, 0.02], [0.15, 1.0, 0.02]], 0.012, gold, 18);
+        box(gold, [0, 1.12, 0.15], [0.035, 0.17, 0.025]);
+        box(gold, [0, 1.14, 0.16], [0.12, 0.03, 0.025]);
+        cylinder(0.025, 0.03, 0.9, iron, [-0.27, 0.62, 0], [0, 0, -0.04]);
+        tube([[-0.27, 1.08, 0], [-0.2, 1.2, 0], [-0.12, 1.17, 0]], 0.018, gold, 12);
+        sphere(gold, [-0.12, 1.17, 0], [0.035, 0.035, 0.035]);
+        limb([0.13, 0.7, 0], [0.18, 0.55, 0.16], 0.035, stone, 0.03);
+        sphere(stone, [0.18, 0.54, 0.16], [0.045, 0.05, 0.04]);
+        box(iron, [0.2, 0.47, 0.2], [0.15, 0.2, 0.045], [0, 0, 0.12]);
+      } else if (type === 'queen') {
+        lathe([[0.1, 0.15], [0.26, 0.19], [0.24, 0.27], [0.2, 0.44], [0.15, 0.76], [0.12, 0.87]], stone);
+        lathe([[0.1, 0.18], [0.27, 0.2], [0.26, 0.25]], gold);
+        addRobeFolds(0.82, 0.2, 0.24, 13);
+        sphere(iron, [0, 0.93, -0.04], [0.16, 0.23, 0.11]);
+        sphere(stone, [0, 0.99, 0.03], [0.115, 0.15, 0.095]);
+        addFace(1.0, 0.08, 0.82);
+        tube([[-0.12, 1.05, -0.03], [-0.15, 0.77, -0.02], [-0.12, 0.59, 0.02]], 0.025, iron, 16);
+        tube([[0.12, 1.05, -0.03], [0.15, 0.77, -0.02], [0.12, 0.59, 0.02]], 0.025, iron, 16);
+        cylinder(0.13, 0.15, 0.055, gold, [0, 1.13, 0]);
+        for (let i = 0; i < 8; i++) {
+          const angle = i * Math.PI / 4;
+          cone(0.027, 0.12, gold, [Math.cos(angle) * 0.14, 1.22, Math.sin(angle) * 0.14]);
+          sphere(iron, [Math.cos(angle) * 0.14, 1.2, Math.sin(angle) * 0.14], [0.014, 0.022, 0.014]);
+        }
+        sphere(gold, [0, 1.28, 0], [0.04, 0.05, 0.04]);
+        limb([-0.11, 0.7, 0.04], [-0.08, 0.59, 0.13], 0.035, stone, 0.03);
+        limb([0.11, 0.7, 0.04], [0.08, 0.59, 0.13], 0.035, stone, 0.03);
+        sphere(stone, [0, 0.56, 0.16], [0.09, 0.07, 0.07]);
+        for (let i = 0; i < 5; i++) {
+          sphere(gold, [Math.cos(i * Math.PI * 2 / 5) * 0.19, 0.9, Math.sin(i * Math.PI * 2 / 5) * 0.19], [0.025, 0.025, 0.025]);
+        }
+      } else {
+        lathe([[0.1, 0.15], [0.25, 0.2], [0.23, 0.28], [0.19, 0.44], [0.15, 0.76], [0.12, 0.86]], stone);
+        lathe([[0.14, 0.42], [0.19, 0.45], [0.18, 0.49]], gold);
+        addRobeFolds(0.77, 0.18, 0.23, 12);
+        sphere(iron, [0, 0.91, -0.03], [0.16, 0.2, 0.12]);
+        sphere(stone, [0, 0.94, 0.04], [0.12, 0.16, 0.1]);
+        addFace(0.95, 0.1, 0.86);
+        sphere(stone, [0, 0.8, 0.04], [0.11, 0.06, 0.12]);
+        sphere(leather, [0, 0.79, 0.105], [0.085, 0.12, 0.055]);
+        for (const side of [-1, 1]) {
+          tube([[side * 0.04, 0.92, 0.14], [side * 0.06, 0.88, 0.17], [side * 0.08, 0.84, 0.15]], 0.009, iron, 10);
+        }
+        for (let i = -2; i <= 2; i++) {
+          tube([[i * 0.035, 0.88, 0.12], [i * 0.045, 0.76, 0.13], [i * 0.055, 0.62, 0.1]], 0.018, stone, 10);
+        }
+        cylinder(0.14, 0.16, 0.055, gold, [0, 1.07, 0]);
+        for (let i = 0; i < 7; i++) {
+          const angle = i * Math.PI * 2 / 7;
+          cone(0.035, 0.14, gold, [Math.cos(angle) * 0.13, 1.17, Math.sin(angle) * 0.13]);
+        }
+        limb([-0.12, 0.72, 0], [-0.19, 0.56, 0.12], 0.04, stone, 0.032);
+        limb([0.12, 0.72, 0], [0.18, 0.58, 0.08], 0.04, stone, 0.032);
+        limb([0.18, 0.58, 0.08], [0.28, 0.68, 0.02], 0.03, stone, 0.025);
+        cylinder(0.022, 0.028, 0.72, iron, [0.29, 0.77, 0], [0, 0, -0.08]);
+        sphere(gold, [0.29, 1.15, 0], [0.05, 0.05, 0.05]);
+        cylinder(0.13, 0.15, 0.045, iron, [0.19, 0.54, 0.16], [Math.PI / 2, 0, 0], 8);
+        box(gold, [0.19, 0.54, 0.185], [0.025, 0.16, 0.02]);
+        box(gold, [0.19, 0.54, 0.185], [0.12, 0.025, 0.02]);
+      }
+
+      root.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      return root;
+    }
+
     function instantiatePiece(type, color, r, c) {
-      const tpl = pieceTemplates[`${type}_${color}`];
+      const isBoardFitModelSet = activePieceSet === 'vitez' || activePieceSet === 'srpski';
+      const tpl = isBoardFitModelSet
+        ? (activePieceSet === 'vitez' ? vitezPieceTemplates : srpskiPieceTemplates)[`${type}_${color}`]
+        : pieceTemplates[`${type}_${color}`];
       let root;
       let mixer = null;
       const actions = {};
@@ -1940,28 +2274,51 @@ export function initWizardChess() {
         root = createAncientPiece(type, color);
       } else if (activePieceSet === 'dragon') {
         root = createDragonPiece(type, color);
+      } else if (activePieceSet === 'medieval') {
+        root = createMedievalPiece(type, color);
       } else if (tpl && tpl.scene) {
-        root = SkeletonUtils.clone(tpl.scene);
-        const primaryMat = color === 'w' ? whitePieceMat : blackPieceMat;
-        root.traverse((child) => {
-          const nm = child.name || '';
-          if (nm.includes('Icosphere') || nm.includes('glTF_not_exported')) {
-            child.visible = false;
-            return;
-          }
-          if (child.isMesh) {
-            const mName = child.material?.name || '';
-            if (mName.includes('Gold') || mName.includes('Trim') || mName.includes('Bronze') || mName.includes('Glow')) {
-              child.material = goldTrimMat;
-            } else if (mName.includes('Steel')) {
-              child.material = forgedSteelMat;
-            } else {
-              child.material = primaryMat;
+        if (isBoardFitModelSet) {
+          const model = SkeletonUtils.clone(tpl.scene);
+          const modelBounds = new THREE.Box3().setFromObject(model);
+          const modelSize = modelBounds.getSize(new THREE.Vector3());
+          const modelScale = BOARD_FIT_PIECE_HEIGHTS[type] / modelSize.y;
+          root = new THREE.Group();
+          model.scale.setScalar(modelScale);
+          model.position.set(
+            -((modelBounds.min.x + modelBounds.max.x) / 2) * modelScale,
+            -modelBounds.min.y * modelScale,
+            -((modelBounds.min.z + modelBounds.max.z) / 2) * modelScale
+          );
+          root.add(model);
+          root.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
             }
-            child.castShadow = true;
-            child.receiveShadow = true;
-          }
-        });
+          });
+        } else {
+          root = SkeletonUtils.clone(tpl.scene);
+          const primaryMat = color === 'w' ? whitePieceMat : blackPieceMat;
+          root.traverse((child) => {
+            const nm = child.name || '';
+            if (nm.includes('Icosphere') || nm.includes('glTF_not_exported')) {
+              child.visible = false;
+              return;
+            }
+            if (child.isMesh) {
+              const mName = child.material?.name || '';
+              if (mName.includes('Gold') || mName.includes('Trim') || mName.includes('Bronze') || mName.includes('Glow')) {
+                child.material = goldTrimMat;
+              } else if (mName.includes('Steel')) {
+                child.material = forgedSteelMat;
+              } else {
+                child.material = primaryMat;
+              }
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+        }
         mixer = new THREE.AnimationMixer(root);
         for (const clip of tpl.animations) {
           actions[clip.name] = mixer.clipAction(clip);
@@ -1976,8 +2333,7 @@ export function initWizardChess() {
 
       const worldPos = boardToWorld(r, c);
       root.position.copy(worldPos);
-      const scale = BOARD_SQ_SIZE;
-      root.scale.set(scale, scale, scale);
+      root.scale.setScalar(isBoardFitModelSet ? 1 : BOARD_SQ_SIZE);
       // White (at +Z, r=6,7) faces -Z (Math.PI); Black (at -Z, r=0,1) faces +Z (0)
       root.rotation.y = color === 'w' ? Math.PI : 0;
       scene.add(root);
@@ -2351,7 +2707,7 @@ export function initWizardChess() {
           }
           if (piece.mesh) {
             scene.remove(piece.mesh);
-            if (previousPieceSet === 'ancient' || previousPieceSet === 'dragon') {
+            if (previousPieceSet === 'ancient' || previousPieceSet === 'dragon' || previousPieceSet === 'medieval') {
               piece.mesh.traverse((child) => {
                 if (child.isMesh) child.geometry.dispose();
               });

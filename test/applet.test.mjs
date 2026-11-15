@@ -96,15 +96,43 @@ test('Procedural chess sets are selectable without replacing the existing sculpt
   const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
   const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
   assert.ok(appTsx.includes('wizard_chess_piece_set'), 'Piece set preference must persist locally');
-  assert.ok(engine.includes("PIECE_SET_IDS = ['wizard', 'ancient', 'dragon']"), 'All three piece set IDs must be supported');
+  assert.ok(engine.includes("PIECE_SET_IDS = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski']"), 'All six piece set IDs must be supported');
   assert.ok(engine.includes('function createAncientPiece(type, color)'), 'Ancient pieces must be generated procedurally');
   assert.ok(engine.includes('function createDragonPiece(type, color)'), 'Dragon and knight pieces must be generated procedurally');
+  assert.ok(engine.includes('function createMedievalPiece(type, color)'), 'Medieval pieces must be generated procedurally');
+  assert.ok(engine.includes('map: medievalStoneTexture'), 'Medieval stone should have a subtle surface grain');
+  assert.ok(engine.includes('bumpMap: medievalStoneTexture'), 'Medieval stone should have tactile surface relief');
+  assert.ok(engine.includes('color: 0x454950'), 'Black medieval stone should use a darker slate color');
+  assert.ok(engine.includes('medievalBlackIron: new THREE.MeshStandardMaterial'), 'Black medieval armor should use dark iron');
+  assert.ok(engine.includes('color === \'w\' ? pieceSetMaterials.medievalIron : pieceSetMaterials.medievalBlackIron'), 'Black figures should use darker armor');
+  assert.ok(engine.includes('medievalSkin: new THREE.MeshStandardMaterial'), 'Medieval figures should have natural skin tones');
+  assert.ok(engine.includes('new THREE.LatheGeometry(points.map(([x, y]) => new THREE.Vector2(x, y)), 48)'), 'Medieval silhouettes should use smoother geometry');
+  assert.match(engine, /function createMedievalPiece[\s\S]*?const tube =/);
+  assert.match(engine, /function createMedievalPiece[\s\S]*?const limb =/);
   assert.ok(engine.includes('function setPieceSet(pieceSetId)'), 'Engine must support changing sets during a game');
   assert.ok(engine.includes('      setPieceSet,'), 'Piece set control must be exposed to the UI');
   assert.ok(engine.includes("activePieceSet === 'ancient'"), 'Existing GLB pieces must remain the default set');
   assert.ok(engine.includes("activePieceSet === 'dragon'"), 'Fantasy set must be selectable');
-  assert.ok(engine.includes("previousPieceSet === 'ancient' || previousPieceSet === 'dragon'"), 'Procedural geometries must be disposed when leaving either generated set');
+  assert.ok(engine.includes("activePieceSet === 'medieval'"), 'Medieval set must be selectable');
+  assert.ok(engine.includes("activePieceSet === 'vitez'"), 'Vitez GLB set must be selectable');
+  assert.ok(engine.includes("activePieceSet === 'srpski'"), 'Srpski GLB set must be selectable');
+  assert.ok(engine.includes("(activePieceSet === 'vitez' ? vitezPieceTemplates : srpskiPieceTemplates)[`${type}_${color}`]"), 'Both detailed sets must load a separate model for each piece color');
+  assert.ok(engine.includes("const folder = color === 'w' ? 'bele' : 'crne'"), 'GLB paths must use the matching white or black assets');
+  assert.ok(engine.includes('loadGltfModel(`${setId}/${folder}/medieval_${type}`)'), 'Both detailed sets must load models from their own asset folders');
+  assert.ok(engine.includes("['vitez', vitezPieceTemplates], ['srpski', srpskiPieceTemplates]"), 'Both full-color GLB sets must be loaded');
+  assert.ok(engine.includes('const BOARD_FIT_PIECE_HEIGHTS = {'), 'Board-fit sets must share normalized target heights');
+  assert.ok(engine.includes('modelBounds.min.x + modelBounds.max.x'), 'Board-fit models must be centered on each square');
+  assert.ok(engine.includes('-modelBounds.min.y'), 'Board-fit model bases must sit on the board surface');
+  assert.ok(engine.includes('const modelScale = BOARD_FIT_PIECE_HEIGHTS[type] / modelSize.y'), 'Board-fit target height must use each model’s measured height');
+  assert.ok(engine.includes('model.scale.setScalar(modelScale)'), 'Board-fit models must be uniformly scaled by measured height');
+  assert.ok(engine.includes('-((modelBounds.min.x + modelBounds.max.x) / 2) * modelScale'), 'Board-fit centering offset must be applied in scaled model coordinates');
+  assert.ok(engine.includes('root.scale.setScalar(isBoardFitModelSet ? 1 : BOARD_SQ_SIZE)'), 'Normalized models must not receive a second global scale');
+  assert.match(engine, /if \(isBoardFitModelSet\) \{[\s\S]*?child\.receiveShadow = true;[\s\S]*?\} else \{/);
+  assert.ok(engine.includes("previousPieceSet === 'ancient' || previousPieceSet === 'dragon' || previousPieceSet === 'medieval'"), 'Procedural geometries must be disposed when leaving a generated set');
   assert.ok(appTsx.includes("dragon: 'Zmajevi i vitezovi'"), 'Fantasy set must have a localized name');
+  assert.ok(appTsx.includes("medieval: 'Srednji vek'"), 'Medieval set must have a localized name');
+  assert.ok(appTsx.includes("vitez: 'Vitez'"), 'Vitez set must be selectable by name');
+  assert.ok(appTsx.includes("srpski: 'Srpski'"), 'Srpski set must be selectable by name');
 });
 
 test('All 7 compressed 3D assets (.glb.gz.b64) decode and gunzip to valid glTF 2.0 binary models', () => {
@@ -133,6 +161,36 @@ test('All 7 compressed 3D assets (.glb.gz.b64) decode and gunzip to valid glTF 2
     assert.equal(magic, 'glTF', `Invalid glTF magic header for ${name}`);
     assert.equal(version, 2, `Invalid glTF version for ${name}`);
     assert.equal(totalLen, glbBuf.length, `Mismatched glTF byte length for ${name}`);
+  }
+});
+
+test('Both 12-piece GLB sets decode to valid GLB 2.0 assets', () => {
+  const pieceTypes = ['pawn', 'rook', 'knight', 'bishop', 'queen', 'king'];
+  const colors = ['bele', 'crne'];
+  const pieceSets = ['vitez', 'srpski'];
+
+  for (const setId of pieceSets) {
+    for (const color of colors) {
+      for (const type of pieceTypes) {
+        const name = `medieval_${type}`;
+        const b64Path = path.join(ROOT, 'public/assets/glb', setId, color, `${name}.glb.gz.b64`);
+        assert.ok(fs.existsSync(b64Path), `Missing ${setId} model ${color}/${name}`);
+        const b64Text = fs.readFileSync(b64Path, 'utf-8').trim();
+        assert.ok(b64Text.length > 1000, `${setId} asset ${color}/${name} is unexpectedly small`);
+
+        const glbBuf = zlib.gunzipSync(Buffer.from(b64Text, 'base64'));
+        assert.equal(glbBuf.toString('ascii', 0, 4), 'glTF', `Invalid GLB header for ${setId}/${color}/${name}`);
+        assert.equal(glbBuf.readUInt32LE(4), 2, `Invalid GLB version for ${setId}/${color}/${name}`);
+        assert.equal(glbBuf.readUInt32LE(8), glbBuf.length, `Invalid GLB byte length for ${setId}/${color}/${name}`);
+
+        if (setId === 'vitez' && color === 'bele') {
+          const jsonLength = glbBuf.readUInt32LE(12);
+          const gltf = JSON.parse(glbBuf.toString('utf8', 20, 20 + jsonLength).trim());
+          assert.ok(gltf.materials.length >= 1, `Vitez white ${type} should contain a material`);
+          assert.ok(gltf.images.length >= 1, `Vitez white ${type} should retain its embedded texture`);
+        }
+      }
+    }
   }
 });
 

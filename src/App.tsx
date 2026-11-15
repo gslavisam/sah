@@ -10,16 +10,19 @@ import { progressionService } from './services/progressionService';
 import type { SceneThemeId } from './services/sceneThemes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 
-type PieceSetId = 'wizard' | 'ancient' | 'dragon';
+type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski';
 type AIDifficulty = 'easy' | 'medium' | 'hard';
 type CameraView = 'player' | 'top';
 
-const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon'];
+const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski'];
 const AI_DIFFICULTY_ORDER: AIDifficulty[] = ['easy', 'medium', 'hard'];
 const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   wizard: 'Čarobnjački',
   ancient: 'Antički',
-  dragon: 'Zmajevi i vitezovi'
+  dragon: 'Zmajevi i vitezovi',
+  medieval: 'Srednji vek',
+  vitez: 'Vitez',
+  srpski: 'Srpski'
 };
 const AI_DIFFICULTY_NAMES: Record<AIDifficulty, string> = {
   easy: 'Lako',
@@ -34,7 +37,7 @@ export default function App() {
   const [selectedPieceSet, setSelectedPieceSet] = useState<PieceSetId>(() => {
     try {
       const saved = localStorage.getItem('wizard_chess_piece_set');
-      if (saved === 'ancient' || saved === 'dragon' || saved === 'wizard') return saved;
+      if (saved === 'ancient' || saved === 'dragon' || saved === 'medieval' || saved === 'vitez' || saved === 'srpski' || saved === 'wizard') return saved;
       return 'wizard';
     } catch (error) {
       console.warn('Chess piece set preference could not be loaded.', error);
