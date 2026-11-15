@@ -407,9 +407,23 @@ body.cinematic-ui-hidden #hud-bottom {
 .mobile-sheet-handle-wrap,
 .mobile-sheet-header,
 .mobile-sheet-section-label,
-.mobile-sheet-hint,
-.mobile-only-restore-ui {
+.mobile-sheet-hint {
   display: none;
+}
+
+body.cinematic-ui-hidden .restore-ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 40;
+  min-height: 38px;
+  padding: 7px 14px;
+  border-color: var(--hud-border);
+  color: var(--gold-bright);
+  pointer-events: auto;
 }
 
 /* Mobile Responsive View Optimization */
@@ -475,22 +489,6 @@ body.cinematic-ui-hidden #hud-bottom {
     border-color: var(--hud-border);
     color: var(--gold-bright);
     white-space: nowrap;
-  }
-
-  /* Restore UI button when Hide UI is active on mobile */
-  body.cinematic-ui-hidden .mobile-only-restore-ui {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    position: fixed;
-    top: 12px;
-    right: 12px;
-    z-index: 22;
-    min-height: 38px;
-    padding: 7px 14px;
-    border-color: var(--hud-border);
-    color: var(--gold-bright);
-    pointer-events: auto;
   }
 
   /* Bottom Sheet Backdrop */

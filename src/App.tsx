@@ -11,12 +11,20 @@ import type { SceneThemeId } from './services/sceneThemes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 
 type PieceSetId = 'wizard' | 'ancient' | 'dragon';
+type AIDifficulty = 'easy' | 'medium' | 'hard';
+type CameraView = 'player' | 'top';
 
 const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon'];
+const AI_DIFFICULTY_ORDER: AIDifficulty[] = ['easy', 'medium', 'hard'];
 const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   wizard: 'Čarobnjački',
   ancient: 'Antički',
   dragon: 'Zmajevi i vitezovi'
+};
+const AI_DIFFICULTY_NAMES: Record<AIDifficulty, string> = {
+  easy: 'Lako',
+  medium: 'Srednje',
+  hard: 'Teško'
 };
 
 export default function App() {
@@ -33,6 +41,17 @@ export default function App() {
       return 'wizard';
     }
   });
+  const [aiDifficulty, setAIDifficulty] = useState<AIDifficulty>(() => {
+    try {
+      const saved = localStorage.getItem('wizard_chess_ai_difficulty');
+      if (saved === 'medium' || saved === 'hard') return saved;
+      return 'easy';
+    } catch (error) {
+      console.warn('AI difficulty preference could not be loaded.', error);
+      return 'easy';
+    }
+  });
+  const [cameraView, setCameraView] = useState<CameraView>('player');
   const selectedPersonaRef = useRef<PersonaId>('mentor');
   const [aiMessage, setAiMessage] = useState(
     'Pozdrav, šegrte! Ja sam Alistair. Tu sam da te vodim i učinim svaki potez jasnim.'
@@ -76,7 +95,20 @@ export default function App() {
     initWizardChess();
     const pieceSetWindow = window as Window & { wizardChess?: { setPieceSet?: (id: PieceSetId) => boolean } };
     pieceSetWindow.wizardChess?.setPieceSet?.(selectedPieceSet);
+    const aiWindow = window as Window & { wizardChess?: { setAIDifficulty?: (difficulty: AIDifficulty) => boolean } };
+    if (!aiWindow.wizardChess?.setAIDifficulty?.(aiDifficulty)) {
+      console.warn(`Could not apply AI difficulty: ${aiDifficulty}.`);
+    }
     applySceneTheme(selectedPersonaRef.current);
+  }, []);
+
+  useEffect(() => {
+    const handleCameraViewChange = (event: Event) => {
+      const view = (event as CustomEvent<{ view?: CameraView }>).detail?.view;
+      if (view === 'player' || view === 'top') setCameraView(view);
+    };
+    window.addEventListener('wizardchess:cameraview', handleCameraViewChange);
+    return () => window.removeEventListener('wizardchess:cameraview', handleCameraViewChange);
   }, []);
 
   const handleTogglePieceSet = () => {
@@ -93,6 +125,37 @@ export default function App() {
     } catch (error) {
       console.warn('Chess piece set preference could not be saved.', error);
     }
+    setMobileSheetOpen(false);
+  };
+
+  const handleToggleAIDifficulty = () => {
+    const currentIndex = AI_DIFFICULTY_ORDER.indexOf(aiDifficulty);
+    const nextDifficulty = AI_DIFFICULTY_ORDER[(currentIndex + 1) % AI_DIFFICULTY_ORDER.length];
+    const aiWindow = window as Window & { wizardChess?: { setAIDifficulty?: (difficulty: AIDifficulty) => boolean } };
+    if (!aiWindow.wizardChess?.setAIDifficulty?.(nextDifficulty)) {
+      console.warn(`Could not switch AI difficulty to ${nextDifficulty}.`);
+      return;
+    }
+    setAIDifficulty(nextDifficulty);
+    try {
+      localStorage.setItem('wizard_chess_ai_difficulty', nextDifficulty);
+    } catch (error) {
+      console.warn('AI difficulty preference could not be saved.', error);
+    }
+    setMobileSheetOpen(false);
+  };
+
+  const handleToggleCameraView = () => {
+    const nextView = cameraView === 'player' ? 'top' : 'player';
+    const win = window as Window & {
+      wizardChess?: { setCameraPreset?: (preset: CameraView) => void };
+    };
+    if (!win.wizardChess?.setCameraPreset) {
+      console.warn('Could not switch camera view: chess engine is unavailable.');
+      return;
+    }
+    win.wizardChess.setCameraPreset(nextView);
+    setCameraView(nextView);
     setMobileSheetOpen(false);
   };
 
@@ -344,10 +407,11 @@ export default function App() {
 
       <button
         type="button"
-        className="hud-btn mobile-only-restore-ui"
+        className="hud-btn restore-ui-button"
         id="btn-mobile-show-ui"
         onClick={handleRestoreUI}
         title="Show HUD Controls"
+        aria-label="Vrati kontrole igre"
       >
         Show UI
       </button>
@@ -461,6 +525,16 @@ export default function App() {
             ♟ Set figura: {PIECE_SET_NAMES[selectedPieceSet]}
           </button>
           <button
+            type="button"
+            className="hud-btn"
+            id="btn-ai-difficulty"
+            title="Promeni težinu protivnika"
+            aria-label={`Promeni težinu AI protivnika. Trenutna težina: ${AI_DIFFICULTY_NAMES[aiDifficulty]}`}
+            onClick={handleToggleAIDifficulty}
+          >
+            ⚔ Težina: {AI_DIFFICULTY_NAMES[aiDifficulty]}
+          </button>
+          <button
             className="hud-btn"
             id="btn-side-toggle"
             title="Switch between Playing as White and Playing as Black"
@@ -498,37 +572,19 @@ export default function App() {
 
           <div className="hud-divider" aria-hidden="true"></div>
           <div className="mobile-sheet-section-label">
-            <span>Camera Views</span>
-            <span className="mobile-sheet-section-sub">Tap active view to flip</span>
+            <span>Camera View</span>
+            <span className="mobile-sheet-section-sub">Tap to switch view</span>
           </div>
 
           <button
-            className="hud-btn active"
-            id="btn-cam-player"
-            title="Player Camera (Click again to flip White / Black view)"
+            type="button"
+            className={`hud-btn ${cameraView === 'player' || cameraView === 'top' ? 'active' : ''}`}
+            id="btn-camera-view"
+            title="Switch between Player Cam and Overhead"
+            aria-label={`Camera view: ${cameraView === 'player' ? 'Player Cam' : 'Overhead'}. Click to switch view.`}
+            onClick={handleToggleCameraView}
           >
-            Player Cam
-          </button>
-          <button
-            className="hud-btn"
-            id="btn-cam-top"
-            title="Overhead Board View (Click again to flip White / Black orientation)"
-          >
-            Overhead
-          </button>
-          <button
-            className="hud-btn"
-            id="btn-cam-side"
-            title="Side Profile View (Click again to switch East / West side)"
-          >
-            Side
-          </button>
-          <button
-            className="hud-btn"
-            id="btn-cam-wide"
-            title="Wide Cathedral View (Click again to switch North Rose / South Narthex)"
-          >
-            Cathedral
+            {cameraView === 'player' ? 'Player Cam' : 'Overhead'}
           </button>
 
           <div className="hud-divider" aria-hidden="true"></div>

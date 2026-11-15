@@ -929,7 +929,9 @@ export function initWizardChess() {
       dragonScale: new THREE.MeshStandardMaterial({ color: 0x28685b, roughness: 0.3, metalness: 0.48 }),
       dragonAccent: new THREE.MeshStandardMaterial({ color: 0x51b59a, roughness: 0.26, metalness: 0.55 }),
       dragonDark: new THREE.MeshStandardMaterial({ color: 0x183932, roughness: 0.38, metalness: 0.42 }),
-      dragonGold: new THREE.MeshStandardMaterial({ color: 0xd19a48, roughness: 0.3, metalness: 0.8 })
+      dragonGold: new THREE.MeshStandardMaterial({ color: 0xd19a48, roughness: 0.3, metalness: 0.8 }),
+      dragonPawnMarkWhite: new THREE.MeshBasicMaterial({ color: 0xe6dfd0, side: THREE.DoubleSide }),
+      dragonPawnMarkBlack: new THREE.MeshBasicMaterial({ color: 0x111318, side: THREE.DoubleSide })
     };
 
     const boardGroup = new THREE.Group();
@@ -1551,6 +1553,7 @@ export function initWizardChess() {
     let gameMode = 'single'; // 'single' | 'multi'
     let playerColor = 'w';   // 'w' | 'b' | 'spectator'
     let aiAutoPlay = true;
+    let aiDifficulty = 'easy';
     let aiTimer = null;
     let academyMode = false;
     let academySavedState = null;
@@ -1822,6 +1825,18 @@ export function initWizardChess() {
       base();
       if (type === 'pawn') {
         sphere(scaleMat, [0, 0.42, 0], [0.25, 0.22, 0.32]);
+        const pawnMarkMaterial =
+          color === 'w' ? pieceSetMaterials.dragonPawnMarkWhite : pieceSetMaterials.dragonPawnMarkBlack;
+        for (const facing of [-1, 1]) {
+          addAncientPieceMesh(
+            root,
+            new THREE.CircleGeometry(0.075, 24),
+            pawnMarkMaterial,
+            [0, 0.42, facing * 0.17],
+            null,
+            [0, facing < 0 ? Math.PI : 0, 0]
+          );
+        }
         sphere(scaleMat, [0, 0.62, 0.12], [0.2, 0.19, 0.2]);
         sphere(primary, [0, 0.64, 0.27], [0.16, 0.105, 0.13]);
         sphere(goldMat, [-0.07, 0.69, 0.35], [0.035, 0.035, 0.035]);
@@ -1856,9 +1871,10 @@ export function initWizardChess() {
         sphere(darkMat, [0, 0.69, 0.22], [0.16, 0.29, 0.2]);
         sphere(darkMat, [0, 0.91, 0.26], [0.15, 0.16, 0.17]);
         sphere(primary, [0, 0.88, 0.38], [0.13, 0.085, 0.14]);
+        const legMat = color === 'w' ? primary : darkMat;
         for (const side of [-1, 1]) {
-          cylinder(0.05, 0.07, 0.32, darkMat, [side * 0.15, 0.24, -0.1], [0, 0, side * -0.08]);
-          cylinder(0.05, 0.07, 0.3, darkMat, [side * 0.15, 0.24, 0.17], [0, 0, side * -0.08]);
+          cylinder(0.05, 0.07, 0.32, legMat, [side * 0.15, 0.24, -0.1], [0, 0, side * -0.08]);
+          cylinder(0.05, 0.07, 0.3, legMat, [side * 0.15, 0.24, 0.17], [0, 0, side * -0.08]);
           sphere(goldMat, [side * 0.065, 0.95, 0.36], [0.025, 0.025, 0.025]);
           addWing(side, 0.66, -0.12, 0.63);
         }
@@ -2292,7 +2308,9 @@ export function initWizardChess() {
       if (orientCamera) {
         const viewSide = playerColor === 'b' ? 'b' : 'w';
         playerCamSide = viewSide;
+        primaryCameraView = 'player';
         setActiveCamButton('btn-cam-player');
+        notifyPrimaryCameraView();
         setCameraForSide(viewSide, false);
       }
 
@@ -2523,7 +2541,16 @@ export function initWizardChess() {
           if (p && p.color === color) {
             const moves = getLegalMovesForPiece(r, c);
             for (const m of moves) {
-              all.push({ fromR: r, fromC: c, toR: m.r, toC: m.c, capture: m.capture });
+              all.push({
+                fromR: r,
+                fromC: c,
+                toR: m.r,
+                toC: m.c,
+                capture: m.capture,
+                castle: m.castle,
+                rookFromC: m.rookFromC,
+                rookToC: m.rookToC
+              });
             }
           }
         }
@@ -3340,7 +3367,7 @@ export function initWizardChess() {
     // =========================================================================
     // Single-Player Tactical AI (Auto-Plays Opponent Turn + Manual AI Button)
     // =========================================================================
-    function chooseSmartAIMove(color) {
+    function chooseEasyAIMove(color) {
       const legalMoves = getAllLegalMoves(color);
       if (legalMoves.length === 0) return null;
 
@@ -3402,6 +3429,199 @@ export function initWizardChess() {
       }
 
       return bestCandidates[Math.floor(Math.random() * bestCandidates.length)] || legalMoves[0];
+    }
+
+    function applySearchMove(move) {
+      const piece = boardState[move.fromR][move.fromC];
+      const captured = boardState[move.toR][move.toC];
+      const originalPieceType = piece.type;
+      const originalHasMoved = piece.hasMoved;
+      let rook = null;
+      let originalRookHasMoved = false;
+
+      boardState[move.fromR][move.fromC] = null;
+      boardState[move.toR][move.toC] = piece;
+      piece.hasMoved = true;
+
+      if (piece.type === 'king' && Math.abs(move.toC - move.fromC) === 2) {
+        const rookFromC = move.toC > move.fromC ? 7 : 0;
+        const rookToC = move.toC > move.fromC ? 5 : 3;
+        rook = boardState[move.fromR][rookFromC];
+        if (rook) {
+          originalRookHasMoved = rook.hasMoved;
+          boardState[move.fromR][rookFromC] = null;
+          boardState[move.fromR][rookToC] = rook;
+          rook.hasMoved = true;
+        }
+      }
+
+      if (piece.type === 'pawn' && (move.toR === 0 || move.toR === 7)) {
+        piece.type = 'queen';
+      }
+
+      return () => {
+        piece.type = originalPieceType;
+        piece.hasMoved = originalHasMoved;
+        boardState[move.fromR][move.fromC] = piece;
+        boardState[move.toR][move.toC] = captured;
+        if (rook) {
+          const rookFromC = move.toC > move.fromC ? 7 : 0;
+          const rookToC = move.toC > move.fromC ? 5 : 3;
+          boardState[move.fromR][rookFromC] = rook;
+          boardState[move.fromR][rookToC] = null;
+          rook.hasMoved = originalRookHasMoved;
+        }
+      };
+    }
+
+    function evaluateSearchPosition(color) {
+      let score = 0;
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const piece = boardState[r][c];
+          if (!piece) continue;
+
+          const sign = piece.color === color ? 1 : -1;
+          score += sign * PIECE_VALUES[piece.type];
+          const centerDistance = Math.abs(3.5 - r) + Math.abs(3.5 - c);
+          if (piece.type === 'knight' || piece.type === 'bishop') {
+            score += sign * Math.max(0, 4 - centerDistance) * 8;
+          } else if (piece.type === 'pawn') {
+            const advance = piece.color === 'w' ? 6 - r : r - 1;
+            score += sign * (advance * 8 + Math.max(0, 4 - centerDistance) * 3);
+          }
+        }
+      }
+      if (isKingInCheck(color, boardState)) score -= 35;
+      if (isKingInCheck(color === 'w' ? 'b' : 'w', boardState)) score += 35;
+      return score;
+    }
+
+    function chooseMediumAIMove(color) {
+      const legalMoves = getAllLegalMoves(color);
+      if (legalMoves.length === 0) return null;
+
+      const opponentColor = color === 'w' ? 'b' : 'w';
+      let bestScore = -Infinity;
+      let bestCandidates = [];
+
+      for (const move of legalMoves) {
+        const undoMove = applySearchMove(move);
+        const opponentMoves = getAllLegalMoves(opponentColor);
+        let moveScore;
+
+        if (opponentMoves.length === 0) {
+          moveScore = isKingInCheck(opponentColor, boardState) ? 100000 : 0;
+        } else {
+          moveScore = Infinity;
+          for (const reply of opponentMoves) {
+            const undoReply = applySearchMove(reply);
+            let replyScore = evaluateSearchPosition(color);
+            if (isKingInCheck(color, boardState) && getAllLegalMoves(color).length === 0) {
+              replyScore = -100000;
+            }
+            undoReply();
+
+            if (replyScore < moveScore) moveScore = replyScore;
+            if (moveScore <= bestScore) break;
+          }
+        }
+
+        undoMove();
+        if (moveScore > bestScore + 0.1) {
+          bestScore = moveScore;
+          bestCandidates = [move];
+        } else if (Math.abs(moveScore - bestScore) <= 0.1) {
+          bestCandidates.push(move);
+        }
+      }
+
+      return bestCandidates[Math.floor(Math.random() * bestCandidates.length)] || legalMoves[0];
+    }
+
+    function orderSearchMoves(moves) {
+      return moves.sort((a, b) => {
+        const scoreMove = (move) => {
+          const piece = boardState[move.fromR][move.fromC];
+          const target = boardState[move.toR][move.toC];
+          let score = target ? 10 * PIECE_VALUES[target.type] - PIECE_VALUES[piece.type] : 0;
+          if (piece.type === 'pawn' && (move.toR === 0 || move.toR === 7)) score += PIECE_VALUES.queen;
+          if (move.castle) score += 25;
+          return score;
+        };
+        return scoreMove(b) - scoreMove(a);
+      });
+    }
+
+    function searchHardPosition(colorToMove, aiColor, depth, alpha, beta, ply) {
+      const legalMoves = getAllLegalMoves(colorToMove);
+      if (legalMoves.length === 0) {
+        if (!isKingInCheck(colorToMove, boardState)) return 0;
+        return colorToMove === aiColor ? -100000 + ply : 100000 - ply;
+      }
+      if (depth === 0) return evaluateSearchPosition(aiColor);
+
+      const maximizing = colorToMove === aiColor;
+      let bestScore = maximizing ? -Infinity : Infinity;
+      const nextColor = colorToMove === 'w' ? 'b' : 'w';
+
+      for (const move of orderSearchMoves(legalMoves)) {
+        const undoMove = applySearchMove(move);
+        const score = searchHardPosition(nextColor, aiColor, depth - 1, alpha, beta, ply + 1);
+        undoMove();
+
+        if (maximizing) {
+          bestScore = Math.max(bestScore, score);
+          alpha = Math.max(alpha, bestScore);
+        } else {
+          bestScore = Math.min(bestScore, score);
+          beta = Math.min(beta, bestScore);
+        }
+        if (beta <= alpha) break;
+      }
+
+      return bestScore;
+    }
+
+    function chooseHardAIMove(color) {
+      const legalMoves = orderSearchMoves(getAllLegalMoves(color));
+      if (legalMoves.length === 0) return null;
+
+      const opponentColor = color === 'w' ? 'b' : 'w';
+      let bestScore = -Infinity;
+      let alpha = -Infinity;
+      const beta = Infinity;
+      let bestCandidates = [];
+
+      for (const move of legalMoves) {
+        const undoMove = applySearchMove(move);
+        const score = searchHardPosition(opponentColor, color, 2, alpha, beta, 1);
+        undoMove();
+
+        if (score > bestScore + 0.1) {
+          bestScore = score;
+          bestCandidates = [move];
+        } else if (Math.abs(score - bestScore) <= 0.1) {
+          bestCandidates.push(move);
+        }
+        alpha = Math.max(alpha, bestScore);
+      }
+
+      return bestCandidates[Math.floor(Math.random() * bestCandidates.length)] || legalMoves[0];
+    }
+
+    function chooseSmartAIMove(color) {
+      if (aiDifficulty === 'hard') return chooseHardAIMove(color);
+      return aiDifficulty === 'medium' ? chooseMediumAIMove(color) : chooseEasyAIMove(color);
+    }
+
+    function setAIDifficulty(difficulty) {
+      if (difficulty !== 'easy' && difficulty !== 'medium' && difficulty !== 'hard') {
+        console.warn(`Unknown AI difficulty: ${difficulty}`);
+        return false;
+      }
+      aiDifficulty = difficulty;
+      return true;
     }
 
     function triggerAIMoveNow() {
@@ -4773,6 +4993,7 @@ export function initWizardChess() {
     // Camera Presets & HUD Controls
     // =========================================================================
     const camButtons = [
+      'btn-camera-view',
       'btn-cam-player',
       'btn-cam-top',
       'btn-cam-side',
@@ -4782,14 +5003,24 @@ export function initWizardChess() {
     function setActiveCamButton(activeId) {
       for (const id of camButtons) {
         const el = document.getElementById(id);
-        if (el) el.classList.toggle('active', id === activeId);
+        if (el) {
+          const isPrimaryView = activeId === 'btn-cam-player' || activeId === 'btn-cam-top';
+          el.classList.toggle('active', id === activeId || (id === 'btn-camera-view' && isPrimaryView));
+        }
       }
     }
 
     let playerCamSide = 'w';     // toggles 'w' (White) <-> 'b' (Black) on repeat click of Player Cam
     let overheadCamSide = 'w';   // toggles 'w' (White) <-> 'b' (Black) on repeat click of Overhead
+    let primaryCameraView = 'player';
     let sideCamSide = 'east';    // toggles 'east' (+X) <-> 'west' (-X) on repeat click of Side
     let cathedralWideSide = 'north'; // toggles 'north' (Rose Window) <-> 'south' (Narthex Triptych) on repeat click of Cathedral
+
+    function notifyPrimaryCameraView() {
+      window.dispatchEvent(
+        new CustomEvent('wizardchess:cameraview', { detail: { view: primaryCameraView } })
+      );
+    }
 
     function setCameraPose(posArr, targetArr) {
       activeCamTransition = null;
@@ -4805,22 +5036,26 @@ export function initWizardChess() {
 
     function setCameraPreset(preset) {
       if (preset === 'player') {
-        const wasPlayerActive = document.getElementById('btn-cam-player')?.classList.contains('active');
+        const wasPlayerActive = primaryCameraView === 'player';
         if (wasPlayerActive) {
           playerCamSide = playerCamSide === 'w' ? 'b' : 'w';
         } else {
           playerCamSide = playerColor === 'b' ? 'b' : 'w';
         }
-        setActiveCamButton('btn-cam-player');
+        primaryCameraView = 'player';
+        setActiveCamButton('btn-camera-view');
+        notifyPrimaryCameraView();
         setCameraForSide(playerCamSide, false);
       } else if (preset === 'top') {
-        const wasTopActive = document.getElementById('btn-cam-top')?.classList.contains('active');
+        const wasTopActive = primaryCameraView === 'top';
         if (wasTopActive) {
           overheadCamSide = overheadCamSide === 'w' ? 'b' : 'w';
         } else {
           overheadCamSide = playerColor === 'b' ? 'b' : 'w';
         }
-        setActiveCamButton('btn-cam-top');
+        primaryCameraView = 'top';
+        setActiveCamButton('btn-camera-view');
+        notifyPrimaryCameraView();
         const zSign = overheadCamSide === 'b' ? -1 : 1;
         smoothCameraTo(new THREE.Vector3(0, 6.85, zSign * 3.65), new THREE.Vector3(0, 0.78, 0), 0.75);
       } else if (preset === 'side') {
@@ -5049,6 +5284,7 @@ export function initWizardChess() {
     window.wizardChess = {
       setSceneTheme,
       setPieceSet,
+      setAIDifficulty,
       setCameraPreset,
       setCameraPose,
       setCameraLook: setCameraPose,
@@ -5473,7 +5709,7 @@ export function initWizardChess() {
 
           if (heldCameraKeys.size > 0) {
             document
-              .querySelectorAll('#btn-cam-player, #btn-cam-wide, #btn-cam-top, #btn-cam-side')
+              .querySelectorAll('#btn-camera-view, #btn-cam-player, #btn-cam-wide, #btn-cam-top, #btn-cam-side')
               .forEach((b) => b.classList.remove('active'));
           }
         }

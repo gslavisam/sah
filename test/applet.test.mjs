@@ -13,17 +13,18 @@ test('Simplified Single-Player HUD in src/App.tsx excludes speed sliders, notati
   for (const requiredId of [
     'btn-side-toggle',
     'btn-piece-set',
+    'btn-ai-difficulty',
     'btn-ai-move',
     'btn-reset',
-    'btn-cam-player',
-    'btn-cam-top',
-    'btn-cam-side',
-    'btn-cam-wide',
+    'btn-camera-view',
     'btn-hide-ui',
     'controls-hint',
     'captured-tray'
   ]) {
     assert.ok(appTsx.includes(`id="${requiredId}"`), `Missing required HUD control #${requiredId}`);
+  }
+  for (const removedCameraId of ['btn-cam-player', 'btn-cam-top', 'btn-cam-side', 'btn-cam-wide']) {
+    assert.ok(!appTsx.includes(`id="${removedCameraId}"`), `Obsolete camera control #${removedCameraId} must be removed`);
   }
 
   // Must NOT include camera speed sliders, script mode bar, or multiplayer lobby
@@ -43,6 +44,52 @@ test('Simplified Single-Player HUD in src/App.tsx excludes speed sliders, notati
   ]) {
     assert.ok(!appTsx.includes(forbiddenId), `Forbidden UI element #${forbiddenId} found in App.tsx`);
   }
+});
+
+test('Camera control switches between player and overhead views using one button', () => {
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  assert.match(appTsx, /id="btn-camera-view"[\s\S]*?onClick=\{handleToggleCameraView\}[\s\S]*?\{cameraView === 'player' \? 'Player Cam' : 'Overhead'\}/);
+  assert.ok(appTsx.includes('setCameraPreset?: (preset: CameraView) => void'), 'The button must call the engine camera API');
+  assert.ok(appTsx.includes("window.addEventListener('wizardchess:cameraview'"), 'The UI must track camera changes from the engine');
+  assert.ok(engine.includes('      setCameraPreset,'), 'The camera preset API must be exposed');
+  assert.ok(engine.includes("new CustomEvent('wizardchess:cameraview'"), 'Camera changes must notify the React UI');
+});
+
+test('Dragon pawns have team-colored center medallions and white dragon knights have white legs', () => {
+  const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  assert.ok(engine.includes('dragonPawnMarkWhite: new THREE.MeshBasicMaterial({ color: 0xe6dfd0'));
+  assert.ok(engine.includes('dragonPawnMarkBlack: new THREE.MeshBasicMaterial({ color: 0x111318'));
+  assert.ok(engine.includes('for (const facing of [-1, 1])'), 'Pawn marks must be visible from either side');
+  assert.ok(engine.includes('[0, 0.42, facing * 0.17]'), 'Pawn marks must sit on the torso, not the base');
+  assert.ok(engine.includes("color === 'w' ? pieceSetMaterials.dragonPawnMarkWhite : pieceSetMaterials.dragonPawnMarkBlack"));
+  assert.ok(engine.includes("const legMat = color === 'w' ? primary : darkMat"));
+  assert.ok(engine.includes('cylinder(0.05, 0.07, 0.32, legMat'), 'Dragon knight legs must use the side-specific leg material');
+  assert.ok(engine.includes('cylinder(0.05, 0.07, 0.3, legMat'));
+});
+
+test('AI difficulty can be switched and medium and hard levels search ahead', () => {
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  assert.ok(appTsx.includes('wizard_chess_ai_difficulty'), 'AI difficulty preference must persist locally');
+  assert.ok(appTsx.includes("'easy', 'medium', 'hard'"), 'The UI must cycle through all three difficulty levels');
+  assert.ok(appTsx.includes("saved === 'hard'"), 'The hard difficulty preference must persist');
+  assert.ok(engine.includes("aiDifficulty === 'hard'"), 'The engine must select the hard difficulty');
+  assert.ok(engine.includes('function chooseMediumAIMove(color)'), 'Medium difficulty must be implemented');
+  assert.ok(engine.includes('const opponentMoves = getAllLegalMoves(opponentColor)'), 'Medium difficulty must consider opponent replies');
+  assert.ok(engine.includes('if (moveScore <= bestScore) break'), 'Medium difficulty must prune inferior branches');
+  assert.ok(engine.includes('function chooseHardAIMove(color)'), 'Hard difficulty must be implemented');
+  assert.ok(engine.includes('searchHardPosition(opponentColor, color, 2, alpha, beta, 1)'), 'Hard difficulty must search three plies');
+  assert.ok(engine.includes('if (beta <= alpha) break'), 'Hard difficulty must use alpha-beta pruning');
+  assert.ok(engine.includes('setAIDifficulty,'), 'AI difficulty must be exposed to the UI');
+});
+
+test('Restore UI control remains visible and clickable whenever the HUD is hidden', () => {
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const styles = fs.readFileSync(path.join(ROOT, 'src/styles.css'), 'utf-8');
+  assert.match(appTsx, /id="btn-mobile-show-ui"[\s\S]*?onClick=\{handleRestoreUI\}/);
+  assert.match(styles, /body\.cinematic-ui-hidden \.restore-ui-button\s*\{[^}]*display:\s*inline-flex;[^}]*pointer-events:\s*auto;/);
+  assert.ok(styles.includes('z-index: 40;'), 'Restore control must remain above the hidden HUD and overlays');
 });
 
 test('Procedural chess sets are selectable without replacing the existing sculpted models', () => {
