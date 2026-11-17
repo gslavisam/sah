@@ -5,7 +5,8 @@ import { AIBubble } from './components/AIBubble';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { PlayerLevelBar } from './components/PlayerLevelBar';
 import { Academy } from './components/Academy';
-import { Classic2DBoard } from './components/Classic2DBoard';
+import { Classic2DBoard, type PromotionRequest } from './components/Classic2DBoard';
+import { Chess2DPiece } from './components/Chess2DPiece';
 import { PERSONAS, PersonaId, geminiService, MoveEventDetail } from './services/geminiService';
 import { soundService } from './services/soundService';
 import { progressionService } from './services/progressionService';
@@ -15,6 +16,14 @@ import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'srpski-kraljevski';
 type AIDifficulty = 'easy' | 'medium' | 'hard';
 type CameraView = 'player' | 'top';
+type PromotionPieceType = 'queen' | 'rook' | 'bishop' | 'knight';
+
+const PROMOTION_OPTIONS: { type: PromotionPieceType; label: string }[] = [
+  { type: 'queen', label: 'Kraljica' },
+  { type: 'rook', label: 'Top' },
+  { type: 'bishop', label: 'Lovac' },
+  { type: 'knight', label: 'Skakač' },
+];
 
 const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski', 'srpski-kraljevski'];
 const AI_DIFFICULTY_ORDER: AIDifficulty[] = ['easy', 'medium', 'hard'];
@@ -35,18 +44,30 @@ const AI_DIFFICULTY_NAMES: Record<AIDifficulty, string> = {
 
 export default function App() {
   const initializedRef = useRef(false);
+  const aiRequestSeqRef = useRef(0);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [selectedPersona, setSelectedPersona] = useState<PersonaId>('mentor');
   const [selectedPieceSet, setSelectedPieceSet] = useState<PieceSetId>(() => {
     try {
       const saved = localStorage.getItem('wizard_chess_piece_set');
-      if (saved === 'ancient' || saved === 'dragon' || saved === 'medieval' || saved === 'vitez' || saved === 'srpski' || saved === 'wizard') return saved;
+      if (
+        saved === 'ancient' ||
+        saved === 'dragon' ||
+        saved === 'medieval' ||
+        saved === 'vitez' ||
+        saved === 'srpski' ||
+        saved === 'srpski-kraljevski' ||
+        saved === 'wizard'
+      ) {
+        return saved;
+      }
       return 'wizard';
     } catch (error) {
       console.warn('Chess piece set preference could not be loaded.', error);
       return 'wizard';
     }
   });
+  const [isLoadingPieceSet, setIsLoadingPieceSet] = useState(false);
   const [aiDifficulty, setAIDifficulty] = useState<AIDifficulty>(() => {
     try {
       const saved = localStorage.getItem('wizard_chess_ai_difficulty');
@@ -71,6 +92,7 @@ export default function App() {
   const [academyHintCount, setAcademyHintCount] = useState(0);
   const [academyError, setAcademyError] = useState<string | null>(null);
   const [is2DMode, setIs2DMode] = useState(false);
+  const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
 
   const applySceneTheme = (themeId: SceneThemeId) => {
     const win = window as Window & {
@@ -166,19 +188,75 @@ export default function App() {
     setMobileSheetOpen(false);
   };
 
+  useEffect(() => {
+    const win = window as Window & {
+      wizardChess?: { set2DModeActive?: (active: boolean) => boolean };
+    };
+    win.wizardChess?.set2DModeActive?.(is2DMode);
+  }, [is2DMode]);
+
+  useEffect(() => {
+    const handlePieceSetLoading = (event: Event) => {
+      const detail = (event as CustomEvent<{ setId?: PieceSetId; loading?: boolean; failed?: boolean }>).detail;
+      setIsLoadingPieceSet(Boolean(detail?.loading));
+      if (detail?.failed && detail.setId) {
+        setSelectedPieceSet(detail.setId);
+      }
+    };
+    const handlePromotionReq = (event: Event) => {
+      const detail = (event as CustomEvent<PromotionRequest>).detail;
+      if (detail) {
+        setPendingPromotion(detail);
+      }
+    };
+    window.addEventListener('wizardchess:pieceset-loading', handlePieceSetLoading);
+    window.addEventListener('wizardchess:promotion-request', handlePromotionReq);
+    return () => {
+      window.removeEventListener('wizardchess:pieceset-loading', handlePieceSetLoading);
+      window.removeEventListener('wizardchess:promotion-request', handlePromotionReq);
+    };
+  }, []);
+
+  const handleConfirmPromotion = (pieceType: PromotionPieceType) => {
+    if (!pendingPromotion) return;
+    const req = pendingPromotion;
+    setPendingPromotion(null);
+    const win = window as unknown as {
+      wizardChess?: {
+        executeChessMove?: (
+          fromR: number,
+          fromC: number,
+          toR: number,
+          toC: number,
+          options?: { promotion?: PromotionPieceType; instant?: boolean }
+        ) => boolean;
+      };
+    };
+    win.wizardChess?.executeChessMove?.(req.fromR, req.fromC, req.toR, req.toC, {
+      promotion: pieceType,
+      instant: is2DMode,
+    });
+  };
+
   const handleUndoMove = async () => {
+    setPendingPromotion(null);
     const win = window as unknown as { wizardChess?: { undoPlayerMove?: () => boolean } };
     const success = win.wizardChess?.undoPlayerMove?.();
     if (success) {
       soundService.playUndo();
+      const reqId = ++aiRequestSeqRef.current;
       setIsLoadingAI(true);
       try {
         const reaction = await geminiService.getUndoReaction(selectedPersonaRef.current);
-        setAiMessage(reaction);
+        if (reqId === aiRequestSeqRef.current) {
+          setAiMessage(reaction);
+        }
       } catch (err) {
         console.warn('Undo reaction error:', err);
       } finally {
-        setIsLoadingAI(false);
+        if (reqId === aiRequestSeqRef.current) {
+          setIsLoadingAI(false);
+        }
       }
     }
   };
@@ -188,39 +266,56 @@ export default function App() {
       const customEvt = e as CustomEvent<MoveEventDetail>;
       if (!customEvt.detail) return;
 
+      const detail = customEvt.detail;
+      const isPlayerMove = detail.move ? detail.move.color === detail.playerColor : false;
+      const isCheckmate = Boolean(
+        detail.isCheckmate ?? (detail.gameOver && detail.inCheck && !detail.drawReason)
+      );
+      const isDraw = Boolean(detail.gameOver && !isCheckmate);
+
       // Play tactical stone SFX based on move outcome
-      if (customEvt.detail.gameOver) {
+      if (isCheckmate) {
         soundService.playCheckmate();
-      } else if (customEvt.detail.inCheck) {
+      } else if (detail.inCheck) {
         soundService.playCheck();
-      } else if (customEvt.detail.move?.capture) {
+      } else if (detail.move?.capture) {
         soundService.playCapture();
       } else {
         soundService.playMove();
       }
 
-      // Award XP to player when a move completes
-      progressionService.awardMove(
-        Boolean(customEvt.detail.move?.capture),
-        customEvt.detail.inCheck,
-        customEvt.detail.gameOver
-      );
+      // Award XP only for player moves; track opponent captures/checkmate separately
+      if (isPlayerMove) {
+        progressionService.awardMove(
+          Boolean(detail.move?.capture),
+          detail.inCheck,
+          isCheckmate,
+          isDraw
+        );
+      } else {
+        progressionService.recordOpponentMove(Boolean(detail.move?.capture), isCheckmate);
+      }
 
+      const reqId = ++aiRequestSeqRef.current;
       setIsLoadingAI(true);
       try {
-        const reaction = await geminiService.getReaction(
-          selectedPersonaRef.current,
-          customEvt.detail
-        );
-        setAiMessage(reaction);
+        const reaction = await geminiService.getReaction(selectedPersonaRef.current, detail);
+        if (reqId === aiRequestSeqRef.current) {
+          setAiMessage(reaction);
+        }
       } catch (err) {
         console.warn('AI reaction error:', err);
       } finally {
-        setIsLoadingAI(false);
+        if (reqId === aiRequestSeqRef.current) {
+          setIsLoadingAI(false);
+        }
       }
     };
 
     const handleResetEvent = () => {
+      aiRequestSeqRef.current += 1;
+      setIsLoadingAI(false);
+      setPendingPromotion(null);
       const p = PERSONAS[selectedPersonaRef.current];
       setAiMessage(`Nova partija je započeta na oltaru! ${p.name} je spreman za tvoj potez.`);
     };
@@ -244,6 +339,8 @@ export default function App() {
   }, []);
 
   const handleOpenAcademy = () => {
+    setIs2DMode(false);
+    setPendingPromotion(null);
     setAcademyView('home');
     setAcademyPuzzleId(null);
     setAcademyFeedback('idle');
@@ -330,19 +427,31 @@ export default function App() {
   };
 
   useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      const tag = (target as HTMLElement | null)?.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA';
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setMobileSheetOpen(false);
+        if (pendingPromotion) {
+          setPendingPromotion(null);
+        } else if (is2DMode) {
+          setIs2DMode(false);
+        } else {
+          setMobileSheetOpen(false);
+        }
       } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        handleUndoMove();
+        if (!academyVisible && !pendingPromotion && !isTypingTarget(e.target)) {
+          e.preventDefault();
+          handleUndoMove();
+        }
       } else if (e.key === 'u' || e.key === 'U') {
-        // Prevent undo shortcut when typing in input
-        if ((e.target as HTMLElement)?.tagName !== 'INPUT') {
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !isTypingTarget(e.target)) {
           handleUndoMove();
         }
       } else if (e.key === '2') {
-        if ((e.target as HTMLElement)?.tagName !== 'INPUT') {
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !isTypingTarget(e.target)) {
           setIs2DMode((prev) => !prev);
         }
       }
@@ -358,7 +467,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleResize);
     };
-  }, []);
+  }, [academyVisible, is2DMode, pendingPromotion]);
 
   const handleRestoreUI = () => {
     const win = window as unknown as { wizardChess?: { toggleUI?: (force?: boolean) => void } };
@@ -367,12 +476,13 @@ export default function App() {
     } else {
       document.body.classList.remove('cinematic-ui-hidden');
       const btnHide = document.getElementById('btn-hide-ui');
-      if (btnHide) btnHide.textContent = 'Hide UI [H]';
+      if (btnHide) btnHide.textContent = '👁 Sakrij [H]';
     }
   };
 
   const handleRequestHint = async () => {
     progressionService.awardHint();
+    const reqId = ++aiRequestSeqRef.current;
     setIsLoadingAI(true);
     try {
       const win = window as unknown as {
@@ -389,11 +499,15 @@ export default function App() {
         ctx?.currentTurn || 'w',
         ctx?.legalMovesSummary
       );
-      setAiMessage(hint);
+      if (reqId === aiRequestSeqRef.current) {
+        setAiMessage(hint);
+      }
     } catch (err) {
       console.warn('Hint error:', err);
     } finally {
-      setIsLoadingAI(false);
+      if (reqId === aiRequestSeqRef.current) {
+        setIsLoadingAI(false);
+      }
     }
   };
 
@@ -404,7 +518,7 @@ export default function App() {
         <div className="loader-bar-wrap">
           <div className="loader-bar" id="loader-bar"></div>
         </div>
-        <div id="loader-text">Summoning Sanctum Architecture &amp; Sculpted Pieces...</div>
+        <div id="loader-text">Prizivanje katedrale i kamenih figura...</div>
       </div>
 
       <div id="canvas-container"></div>
@@ -433,10 +547,10 @@ export default function App() {
         className="hud-btn restore-ui-button"
         id="btn-mobile-show-ui"
         onClick={handleRestoreUI}
-        title="Show HUD Controls"
+        title="Prikaži kontrole igre [H]"
         aria-label="Vrati kontrole igre"
       >
-        Show UI
+        👁 Prikaži UI
       </button>
 
       <div id="hud-top">
@@ -447,8 +561,8 @@ export default function App() {
 
           <div className="status-pill" id="status-pill">
             <span className="turn-dot" id="turn-dot"></span>
-            <span id="turn-text">White to Move</span>
-            <span className="mode-badge" id="mode-badge">Playing as White</span>
+            <span id="turn-text">Beli na potezu</span>
+            <span className="mode-badge" id="mode-badge">Igraš kao beli</span>
           </div>
 
           {/* Gamified RPG Player Level Bar */}
@@ -583,8 +697,9 @@ export default function App() {
             title="Promeni izgled šahovskih figura"
             aria-label={`Promeni set figura. Trenutni set: ${PIECE_SET_NAMES[selectedPieceSet]}`}
             onClick={handleTogglePieceSet}
+            disabled={isLoadingPieceSet}
           >
-            ♟ {PIECE_SET_NAMES[selectedPieceSet]}
+            {isLoadingPieceSet ? `⏳ ${PIECE_SET_NAMES[selectedPieceSet]}...` : `♟ ${PIECE_SET_NAMES[selectedPieceSet]}`}
           </button>
           <button
             type="button"
@@ -602,14 +717,14 @@ export default function App() {
             title="Igraj kao beli ili crni"
             onClick={() => setMobileSheetOpen(false)}
           >
-            ⮂ Strana
+            ⮂ Igraj crnim
           </button>
           <button
             type="button"
             className={`hud-btn ${cameraView === 'player' || cameraView === 'top' ? 'active' : ''}`}
             id="btn-camera-view"
-            title="Prebaci kameru između igrača i odozgo"
-            aria-label={`Camera view: ${cameraView === 'player' ? 'Player Cam' : 'Overhead'}. Click to switch view.`}
+            title="Prebaci kameru između igrača i pogleda odozgo"
+            aria-label={`Pogled kamere: ${cameraView === 'player' ? 'Igrač' : 'Odozgo'}. Klikni za promenu pogleda.`}
             onClick={handleToggleCameraView}
           >
             🎥 {cameraView === 'player' ? 'Igrač' : 'Odozgo'}
@@ -651,22 +766,22 @@ export default function App() {
 
       <div id="checkmate-overlay" role="status" aria-live="polite">
         <div className="checkmate-banner">
-          <div className="checkmate-ornament">✦ &nbsp; Sanctum Judgment &nbsp; ✦</div>
+          <div className="checkmate-ornament">✦ &nbsp; Presuda Sanctuma &nbsp; ✦</div>
           <div className="checkmate-crown" id="checkmate-crown">♔</div>
-          <div className="checkmate-title" id="checkmate-title">Checkmate</div>
+          <div className="checkmate-title" id="checkmate-title">Šah-mat</div>
           <div className="checkmate-rule"></div>
           <div className="checkmate-subtitle" id="checkmate-subtitle">
-            White Triumphs • The Black King Has Fallen
+            Beli trijumfuje • Pao je crni kralj
           </div>
           <div className="checkmate-actions">
             <button className="checkmate-btn" id="btn-checkmate-replay">
-              Replay King Fall
+              Ponovi pad kralja
             </button>
             <button className="checkmate-btn" id="btn-checkmate-newgame">
-              New Game
+              Nova partija
             </button>
             <button className="checkmate-btn secondary" id="btn-checkmate-dismiss">
-              Dismiss
+              Zatvori
             </button>
           </div>
         </div>
@@ -693,7 +808,45 @@ export default function App() {
         isOpen={is2DMode}
         onClose={() => setIs2DMode(false)}
         onUndoMove={handleUndoMove}
+        onRequestPromotion={setPendingPromotion}
       />
+
+      {pendingPromotion ? (
+        <div
+          className="promotion-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Izbor figure za promociju pešaka"
+          onClick={() => setPendingPromotion(null)}
+        >
+          <div className="promotion-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="promotion-modal-eyebrow">PROMOCIJA PEŠAKA</div>
+            <h3 className="promotion-modal-title">Izaberi novu figuru</h3>
+            <div className="promotion-options-grid">
+              {PROMOTION_OPTIONS.map((opt) => (
+                <button
+                  key={opt.type}
+                  type="button"
+                  className="promotion-option-btn"
+                  onClick={() => handleConfirmPromotion(opt.type)}
+                >
+                  <div className="promotion-option-icon">
+                    <Chess2DPiece type={opt.type} color={pendingPromotion.color} />
+                  </div>
+                  <span className="promotion-option-label">{opt.label}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="promotion-cancel-btn"
+              onClick={() => setPendingPromotion(null)}
+            >
+              Otkaži [Esc]
+            </button>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

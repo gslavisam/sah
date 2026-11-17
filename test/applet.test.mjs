@@ -49,7 +49,7 @@ test('Simplified Single-Player HUD in src/App.tsx excludes speed sliders, notati
 test('Camera control switches between player and overhead views using one button', () => {
   const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
   const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
-  assert.match(appTsx, /id="btn-camera-view"[\s\S]*?onClick=\{handleToggleCameraView\}[\s\S]*?\{cameraView === 'player' \? 'Player Cam' : 'Overhead'\}/);
+  assert.match(appTsx, /id="btn-camera-view"[\s\S]*?onClick=\{handleToggleCameraView\}[\s\S]*?\{cameraView === 'player' \? 'Igrač' : 'Odozgo'\}/);
   assert.ok(appTsx.includes('setCameraPreset?: (preset: CameraView) => void'), 'The button must call the engine camera API');
   assert.ok(appTsx.includes("window.addEventListener('wizardchess:cameraview'"), 'The UI must track camera changes from the engine');
   assert.ok(engine.includes('      setCameraPreset,'), 'The camera preset API must be exposed');
@@ -90,6 +90,14 @@ test('Restore UI control remains visible and clickable whenever the HUD is hidde
   assert.match(appTsx, /id="btn-mobile-show-ui"[\s\S]*?onClick=\{handleRestoreUI\}/);
   assert.match(styles, /body\.cinematic-ui-hidden \.restore-ui-button\s*\{[^}]*display:\s*inline-flex;[^}]*pointer-events:\s*auto;/);
   assert.ok(styles.includes('z-index: 40;'), 'Restore control must remain above the hidden HUD and overlays');
+
+  const bottomMatch = styles.match(/#hud-bottom\s*\{[^}]*bottom:\s*(\d+)px/);
+  const dockMatch = styles.match(/#hud-dock\s*\{[^}]*bottom:\s*(\d+)px/);
+  assert.ok(bottomMatch && dockMatch, '#hud-bottom and #hud-dock must define bottom offsets');
+  assert.ok(
+    Number(dockMatch[1]) >= Number(bottomMatch[1]) + 30,
+    '#hud-dock must sit cleanly above #hud-bottom without overlapping the controls status bar'
+  );
 });
 
 test('Procedural chess sets are selectable without replacing the existing sculpted models', () => {
@@ -217,3 +225,64 @@ test('Academy publishes 12 puzzles and 12 lessons for each learning area', () =>
   assert.match(puzzleSource, /solution: \{ fromR: r, fromC: 6, toR: 0, toC: 6 \}/);
   assert.match(puzzleSource, /solution: \{ fromR: r, fromC: 1, toR: 1, toC: 1 \}/);
 });
+
+test('Piece set persistence includes srpski-kraljevski and extra GLB sets lazy-load on demand', () => {
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+
+  assert.match(
+    appTsx,
+    /localStorage\.getItem\('wizard_chess_piece_set'\)[\s\S]*?saved === 'srpski-kraljevski'/,
+    'Saved srpski-kraljevski piece set must be restored on reload'
+  );
+  assert.ok(
+    engine.includes('function ensureBoardFitPieceSetLoaded(targetSetId'),
+    'Detailed GLB sets must be lazy-loaded via ensureBoardFitPieceSetLoaded'
+  );
+  assert.ok(
+    engine.includes('delete boardFitLoadPromises[setId]'),
+    'Failed lazy loads must not poison the promise cache so retries succeed'
+  );
+  assert.ok(
+    engine.includes('if (!initialAssetsLoaded)'),
+    'Initial saved GLB set must be awaited before spawning the board'
+  );
+  assert.ok(
+    engine.includes("new CustomEvent('wizardchess:pieceset-loading'"),
+    'Engine must notify UI while lazy-loading an unloaded GLB piece set'
+  );
+});
+
+test('Special chess rules, 2D instant sync, single Undo shortcut, and player-only XP are enforced', () => {
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const board2d = fs.readFileSync(path.join(ROOT, 'src/components/Classic2DBoard.tsx'), 'utf-8');
+  const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const gemini = fs.readFileSync(path.join(ROOT, 'src/services/geminiService.ts'), 'utf-8');
+  const progression = fs.readFileSync(path.join(ROOT, 'src/services/progressionService.ts'), 'utf-8');
+
+  // Special chess rules: en passant, promotion choice, 50-move rule, threefold repetition
+  assert.ok(engine.includes('enPassant: true'), 'Pseudo/legal moves must generate en passant captures');
+  assert.ok(engine.includes("PROMOTION_TYPES = ['queen', 'rook', 'bishop', 'knight']"), 'All four promotion piece types must be supported');
+  assert.ok(engine.includes("new CustomEvent('wizardchess:promotion-request'"), 'Human pawn promotion must request piece selection');
+  assert.ok(appTsx.includes('promotion-modal-backdrop'), 'App must render pawn promotion choice modal');
+  assert.ok(engine.includes("drawReason = 'repetition'"), 'Threefold repetition draw must be detected');
+  assert.ok(engine.includes("drawReason = 'fifty-move'"), '50-move draw rule must be detected');
+
+  // KeyU must NOT hide the HUD in wizardChessEngine.js
+  assert.ok(!engine.includes("e.code === 'KeyU'"), 'Pressing U must undo moves, never hide the HUD');
+
+  // 2D mode: instant move execution, render pause, single keydown owner, mate vs draw distinction, turn guard
+  assert.ok(engine.includes('function set2DModeActive(active)'), 'Engine must track 2D mode for instant moves and render pause');
+  assert.ok(engine.includes('const executeInstantly = Boolean(options.instant || is2DModeActive)'), 'Moves in 2D mode must execute without 3D animation delay');
+  assert.ok(!board2d.includes("window.addEventListener('keydown'"), 'Classic2DBoard must not duplicate global Undo/2D keydown listeners');
+  assert.ok(board2d.includes('if (gameOver || currentTurn !== playerColor) return;'), '2D board must prevent clicking AI pieces out of turn');
+  assert.ok(board2d.includes('chess-2d-alert-draw'), '2D board must distinguish stalemate/draw from checkmate');
+
+  // XP & AI persona reactions distinguish player vs AI moves
+  assert.ok(appTsx.includes('if (isPlayerMove) {\n        progressionService.awardMove(') || appTsx.includes('if (isPlayerMove) {'), 'XP move rewards must only trigger on player moves');
+  assert.ok(appTsx.includes('progressionService.recordOpponentMove('), 'Opponent captures/checkmates must not award player victory XP');
+  assert.ok(progression.includes('public recordOpponentMove('), 'ProgressionService must handle opponent captures/wins separately');
+  assert.ok(gemini.includes('isPlayerMove ? pool.checkmate : pool.aiCheckmate'), 'Persona fallback must distinguish player checkmate win vs defeat');
+  assert.ok(gemini.includes('isPlayerMove ? pool.capture : pool.blunder'), 'Persona fallback must use blunder lines when AI captures player piece');
+});
+

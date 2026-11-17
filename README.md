@@ -50,16 +50,17 @@ Vite ugrađuje ovu vrednost u JavaScript aplikacije u pregledaču. Zato nemoj ko
 
 ## Kontrole
 
-- Klikni ili dodirni figuru, pa polje na koje želiš da je pomeriš.
-- **Play as Black / Play as White** menja boju figura kojom igraš.
-- **AI Move** pokreće potez protivnika.
-- **New Game** započinje novu partiju.
-- **Set figura** ciklično menja izgled figura bez resetovanja partije.
-- **2D Klasik / 3D Katedrala** (ili prečica **2**) prebacuje prikaz između pune 3D katedrale i klasične 2D Staunton šahovske table sa oznakama polja i indikatorima legalnih poteza.
-- **Šahovska akademija** otvara četiri oblasti i 48 kratkih aktivnosti; kviz lekcije nude sledeću lekciju, a zagonetke koriste tablu i vraćaju prethodnu partiju pri izlasku.
-- **U** ili **Ctrl+Z** vraća prethodni potez.
-- Izaberi jedan od četiri dugmeta kamere za promenu ugla. Klik na već aktivan pogled menja orijentaciju.
-- **H** sakriva ili vraća interfejs.
+- Klikni ili dodirni figuru, pa polje na koje želiš da je pomeriš (pri ulasku pešaka u poslednji red biraš figuru za promociju: kraljica, top, lovac ili skakač).
+- **⮂ Igraj crnim / Igraj belim** menja boju figura kojom igraš.
+- **⚡ AI** odmah pokreće potez protivnika.
+- **🔄 Nova** započinje novu partiju.
+- **♟ Set figura** ciklično menja izgled figura bez resetovanja partije (dodatni GLB setovi učitavaju se po potrebi).
+- **⚔ Lako / Srednje / Teško** menja težinu lokalnog AI protivnika.
+- **⬚ 2D / 🏰 3D** (ili prečica **2**) prebacuje prikaz između pune 3D katedrale i klasične 2D Staunton šahovske table sa trenutnim odzivom poteza.
+- **✦ Akademija** otvara četiri oblasti i 48 kratkih aktivnosti; kviz lekcije nude sledeću lekciju, a zagonetke koriste tablu i vraćaju prethodnu partiju pri izlasku.
+- **⏳ Vrati** (`U` ili `Ctrl+Z`) vraća prethodni potez.
+- **🎥 Igrač / Odozgo** menja ugao kamere u 3D prikazu.
+- **👁 Sakrij [H]** (prečica **H**) sakriva ili vraća interfejs.
 - Na dodirnom ekranu: prevlačenje jednim prstom rotira kameru, prevlačenje sa dva prsta pomera pogled, a štipanje zumira.
 
 ## Komande

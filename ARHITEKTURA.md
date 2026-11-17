@@ -58,6 +58,8 @@ Engine očekuje da React prvo prikaže HUD elemente koje zatim pronalazi preko I
 | [src/components/ApiKeyModal.tsx](./src/components/ApiKeyModal.tsx) | Unos, čuvanje i brisanje Gemini API ključa preko `geminiService`. |
 | [src/components/PlayerLevelBar.tsx](./src/components/PlayerLevelBar.tsx) | Prikazuje nivo, titulu, XP napredak, niz uzastopnih uzimanja i poslednju XP nagradu. |
 | [src/components/Academy.tsx](./src/components/Academy.tsx) | Prikazuje četiri oblasti, navigaciju kroz lekcije, pitanja sa odgovorima i povratnom informacijom, napredak i mat-zagonetke. |
+| [src/components/Classic2DBoard.tsx](./src/components/Classic2DBoard.tsx) | Klasični 2D Staunton prikaz šahovske table sinhronizovan sa engine-om, sa trenutnim izvršavanjem poteza, okretanjem table i jasnim statusom šaha/mata/remija. |
+| [src/components/Chess2DPiece.tsx](./src/components/Chess2DPiece.tsx) | Vektorski (SVG) prikaz šest šahovskih figura za 2D tablu i modal promocije pešaka. |
 
 ### Logika igre i servisi
 
@@ -119,9 +121,11 @@ Potezi u Akademiji emituju odvojeni `wizardchess:academy-move` događaj. `App` k
 - modele `pawn`, `rook`, `knight`, `bishop`, `queen` i `king`;
 - teksture, materijale i animacije koje dolaze uz te modele.
 
-Modele engine traži prvo kao gzip-kompresovani Base64 GLB iz `./assets/glb/`, pa pokušava običan `.glb` fajl kao rezervu. Učitavanje se odvija pre postavljanja početne table i pokretanja animacione petlje.
+Modele engine traži prvo kao gzip-kompresovani Base64 GLB iz `./assets/glb/`, pa pokušava običan `.glb` fajl kao rezervu. Pri početnom učitavanju dekompresuju se samo katedrala i podrazumevani `wizard` set (plus eventualno zapamćeni detaljni GLB set iz `localStorage`), dok se ostali detaljni GLB setovi (`vitez`, `srpski`, `srpski-kraljevski`) učitavaju lenjo (*lazy-load*) tek kada ih igrač prvi put izabere.
 
-`setPieceSet('wizard' | 'ancient' | 'dragon')` menja prikaz svih figura uživo bez menjanja polja, poteza ili istorije partije. Čarobnjački set koristi postojeće rigovane GLB modele; antički set gradi siluete hoplita, jahača, stub-topa, kralja i kraljice, a „Zmajevi i vitezovi“ dodaje originalne proceduralne zmajeve, oklopljenog konjanika, krilatu kraljicu i tvrđavski top. React čuva korisnikov izbor u `localStorage`.
+`setPieceSet('wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'srpski-kraljevski')` menja prikaz svih figura uživo bez menjanja polja, poteza ili istorije partije. Podržano je sedam setova: rigovani `wizard` GLB set, tri proceduralna seta (`ancient`, `dragon`, `medieval`) čija se geometrija oslobađa pri promeni seta, i tri detaljna dvobojna GLB seta (`vitez`, `srpski`, `srpski-kraljevski`). React čuva korisnikov izbor u `localStorage`.
+
+Dok je otvoren 2D modal (`set2DModeActive(true)`), potezi igrača i AI-ja izvršavaju se trenutno bez čekanja 3D animacije, a 3D render petlja miruje dok se korisnik ne vrati u 3D katedralu.
 
 `src/services/sceneThemes.ts` definiše identifikatore i palete, a `src/services/sceneEnvironments.ts` gradi tri grupe dekorativne geometrije: Alistairove armilarne sfere koje se polako okreću, Grixove zupčanike i nisko lebdeće varnice, odnosno Valeriusove heraldske zastave koje se blago njišu. `stepScene()` u `src/wizardChessEngine.js` ažurira samo trenutno vidljivu grupu; izbor teme ne dodaje nove objekte pri svakom izboru. Dekoracije ostaju van table i dopunjuju postojeću katedralu — nisu zamena za tri kompletna, zasebna okruženja.
 
@@ -131,18 +135,18 @@ Stanje partije čuvaju promenljive unutar `initWizardChess()` — uključujući 
 
 Glavne funkcije pravila i poteza:
 
-- `getPseudoMovesForPiece(...)` — računa geometrijski moguće poteze figure.
+- `getPseudoMovesForPiece(...)` — računa geometrijski moguće poteze figure, uključujući *en passant*.
 - `isKingInCheck(...)` — proverava da li je kralj napadnut.
-- `getLegalMovesForPiece(...)` i `getAllLegalMoves(...)` — filtriraju poteze i izlažu legalne opcije.
-- `executeChessMove(...)` — ažurira stanje table, animira potez/uzimanje, proverava završetak i emituje događaj poteza.
-- `resetChessBoard(...)`, `captureBoardSnapshot()` i `restoreBoardSnapshot(...)` — početak partije i čuvanje/obnavljanje stanja.
+- `getLegalMovesForPiece(...)` i `getAllLegalMoves(...)` — filtriraju poteze zbog šaha i dodaju malu i veliku rokadu (`O-O`, `O-O-O`).
+- `executeChessMove(...)` — ažurira stanje table (uključujući promociju u kraljicu/topa/lovca/skakača, *en passant*, pravilo 50 poteza i trostruko ponavljanje pozicije), animira potez u 3D ili ga izvršava trenutno u 2D režimu, proverava završetak i emituje događaj poteza.
+- `resetChessBoard(...)`, `captureBoardSnapshot()` i `restoreBoardSnapshot(...)` — početak partije i čuvanje/obnavljanje kompletnog stanja.
 - `undoPlayerMove()` — vraća poslednji potez, odnosno poteze igrača i AI-ja u single-player režimu.
 
 Pravila šaha su implementirana u projektu; `package.json` ne sadrži `chess.js` zavisnost.
 
 ### AI protivnik
 
-`chooseSmartAIMove(color)` bira potez među legalnim potezima na osnovu materijalne vrednosti uzimanja, kontrole centra, napredovanja pešaka, šaha i izloženosti figure na polju. Dodaje i malu slučajnu varijaciju. `maybeScheduleAIMove()` zakazuje odgovor protivnika u single-player režimu, a `triggerAIMoveNow()` pokreće potez odmah.
+`chooseSmartAIMove(color)` podržava tri nivoa težine (`easy`, `medium`, `hard`): heuristički izbor poteza na lakom nivou, proveru protivničkih odgovora na srednjem nivou i 3-ply pretragu sa *alpha-beta* odsecanjem na teškom nivou. `maybeScheduleAIMove()` zakazuje odgovor protivnika, a `triggerAIMoveNow()` pokreće potez odmah.
 
 **Važna razlika:** ovaj engine bira poteze za protivnika. Gemini servis generiše tekstualne komentare i savete; ne bira poteze i nije izvor pravila šaha.
 
@@ -188,7 +192,7 @@ U [src/services/geminiService.ts](./src/services/geminiService.ts):
 
 ### XP i nivoi
 
-`progressionService` pamti XP, nivo, titulu, niz uzastopnih uzimanja i statistiku poteza u `localStorage`. `awardMove(...)` obrađuje potez, uzimanje, šah i mat; `awardHint()` dodeljuje XP za hint. `PlayerLevelBar` prati servis preko `subscribe(...)`.
+`progressionService` pamti XP, nivo, titulu, niz uzastopnih uzimanja i statistiku poteza u `localStorage`. `awardMove(...)` dodeljuje XP isključivo za poteze igrača (potez, uzimanje, šah, pobedu matom ili remi), dok `recordOpponentMove(...)` resetuje niz uzimanja kada AI uzme figuru ili matira igrača. `awardHint()` dodeljuje XP za savet. `PlayerLevelBar` prati servis preko `subscribe(...)`.
 
 ## 8. Konfiguracija, pokretanje i provere
 
@@ -210,10 +214,8 @@ TypeScript konfiguracija uključuje i JavaScript fajlove, ali trenutno ne uklju�
 - Šahovsko stanje ostaje privatno unutar `initWizardChess()`; druge celine pristupaju ograničenim funkcijama iz `window.wizardChess`.
 - React i engine dele DOM ID-jeve, pa promena markup-a može uticati na engine handlere.
 - Tematske dekoracije su proceduralni prototipi preko zajedničke katedrale; ne predstavljaju tri kompletna, zasebna okruženja.
-- Kadriranje dekoracije nije potvrđeno za sve poglede i mobilne ekrane.
 - Gemini pozivi idu iz klijentske aplikacije; ključ ugrađen preko env promenljive nije tajna.
-- Engine sadrži multiplayer i notacione funkcije, ali trenutni pojednostavljeni HUD/test potvrđuje da multiplayer lobby i notaciona traka nisu deo prikazanog interfejsa. Njihovo prisustvo u engine-u ne znači da su te funkcije deo uobičajenog toka igre.
-- Testovi pokrivaju HUD strukturu i format 3D modela; ne testiraju pravila šaha, AI kvalitet ni vizuelno iscrtavanje u browseru.
+- Automatski testovi proveravaju HUD ugovor, pravila integracije, katalog Akademije i integritet 3D modela; vizuelno WebGL iscrtavanje proverava se u pregledaču.
 
 ## 10. Funkcije relevantne za planiranje scena
 

@@ -93,7 +93,7 @@ class ProgressionService {
     }
   }
 
-  public awardMove(isCapture: boolean, inCheck: boolean, isCheckmate: boolean) {
+  public awardMove(isCapture: boolean, inCheck: boolean, isCheckmate: boolean, isDraw: boolean = false) {
     let earned = 20;
     let label = '+20 XP Potez';
 
@@ -107,7 +107,7 @@ class ProgressionService {
       this.stats.streak = Math.max(0, this.stats.streak - 1);
     }
 
-    if (inCheck) {
+    if (inCheck && !isCheckmate) {
       earned += 40;
       label = '+40 XP ŠAH!';
     }
@@ -115,12 +115,28 @@ class ProgressionService {
     if (isCheckmate) {
       earned += 250;
       label = '👑 +250 XP MAT! POBEDA!';
+    } else if (isDraw) {
+      earned += 40;
+      label = '🤝 +40 XP Remi!';
     }
 
     this.stats.xp += earned;
     this.stats.totalMoves += 1;
     this.stats.lastAward = label;
     this.recalculateLevel();
+    this.save();
+  }
+
+  public recordOpponentMove(isCapture: boolean, isCheckmate: boolean) {
+    if (!isCapture && !isCheckmate) return;
+    this.stats.streak = 0;
+    if (isCheckmate) {
+      this.stats.xp += 15;
+      this.stats.lastAward = '+15 XP Lekcija iz poraza';
+      this.recalculateLevel();
+    } else {
+      this.stats.lastAward = null;
+    }
     this.save();
   }
 

@@ -64,22 +64,38 @@ export interface MoveEventDetail {
     fromSquare?: string;
     toSquare?: string;
     capture?: boolean;
+    enPassant?: boolean;
+    castle?: 'k' | 'q';
     promotion?: string;
   } | null;
   currentTurn: 'w' | 'b';
   gameOver: boolean;
+  isCheckmate?: boolean;
+  drawReason?: 'stalemate' | 'fifty-move' | 'repetition' | null;
   inCheck: boolean;
   moveCount: number;
   playerColor: 'w' | 'b';
 }
+
+const PIECE_NAMES_SR: Record<string, string> = {
+  pawn: 'pešaka',
+  rook: 'topa',
+  knight: 'skakača',
+  bishop: 'lovca',
+  queen: 'kraljicu',
+  king: 'kralja',
+};
 
 // Offline fallback responses for instant responsiveness and when no API key is set
 const FALLBACK_REACTIONS: Record<PersonaId, {
   opening: string[];
   capture: string[];
   check: string[];
+  aiCheck: string[];
   blunder: string[];
   checkmate: string[];
+  aiCheckmate: string[];
+  draw: string[];
   general: string[];
 }> = {
   mentor: {
@@ -95,6 +111,10 @@ const FALLBACK_REACTIONS: Record<PersonaId, {
       'Šah! Protivnički kralj je u opasnosti, drži pritisak!',
       'Kralj je napadnut! Sada je trenutak da vidiš gde su mu putevi za bekstvo.',
     ],
+    aiCheck: [
+      'Oprez, šegrte — tvoj kralj je u šahu! Pronađi zaklon, blokiraj napad ili uzmi napadača.',
+      'Šah nad tvojim kraljem! Mirno proveri sva sigurna polja za odbranu.',
+    ],
     blunder: [
       'Oprez, šegrte! Ova figura je možda ostala nebranjena. Uvek proveri gde protivnik cilja.',
       'Ne brini za grešku — svaki poraz je samo lekcija na putu do velemajstora.',
@@ -102,6 +122,14 @@ const FALLBACK_REACTIONS: Record<PersonaId, {
     checkmate: [
       'Mat! Maestralna pobeda u sanctumu, dokazao si svoju snagu!',
       'Sanctum se klanja novom šampionu. Odlična partija!',
+    ],
+    aiCheckmate: [
+      'Ne brini za grešku — svaki poraz je samo lekcija na putu do velemajstora.',
+      'Protivnik je pronašao mat ovog puta, šegrte. Pokreni novu partiju i primeni naučeno!',
+    ],
+    draw: [
+      'Partija je završena remijem! Ravnoteža snaga u sanctumu ostaje netaknuta.',
+      'Častan remi! Nekada je čvrsta odbrana jednako vredna kao i pobeda.',
     ],
     general: [
       'Pogledaj celu tablu pre sledećeg poteza — magija je u strpljenju.',
@@ -115,19 +143,32 @@ const FALLBACK_REACTIONS: Record<PersonaId, {
     ],
     capture: [
       'BAM! Otišla figura u paramparčad! Ovaj udarac je boleo i kroz ekran.',
-      'Donacija uspešno prihvaćena! Hvala lepo, dođite nam opet.',
+      'Okej, priznaću ti — fin udarac! Ali nemoj sad odmah da poletiš.',
     ],
     check: [
       'ŠAH! Kralj beži kao da mu gori katedrala pod nogama!',
+      'Oho, daješ šah?! Pazi samo da ti se to ne vrati kao bumerang!',
+    ],
+    aiCheck: [
       'Panika u redovima, gde ćeš sad sa krunom majstore?',
+      'ŠAH! Kralj beži kao da mu gori katedrala pod nogama!',
     ],
     blunder: [
+      'Donacija uspešno prihvaćena! Hvala lepo, dođite nam opet.',
       'Brate, šta je ovo bilo?! Da li ti igraš šah ili deliš poklone za praznike?',
       'Definicija "skill issue"-a u jednom jedinom kliku. Moj rejting plače.',
     ],
     checkmate: [
+      'Nemoguće... dobio si matom?! Sigurno mi je zalagovao mozak, tražim revanš odmah!',
+      'GG! Matčina veka! Priznajem, ovog puta si pokidao tablu.',
+    ],
+    aiCheckmate: [
       'GG! Matčina veka! Vreme je da se ugasi igrica i ode na svež vazduh.',
       'Zatvaraj katedralu, motaj kablove — ovo je bio apsolutni potop!',
+    ],
+    draw: [
+      'Remi?! Toliko muke ni oko čega — bukvalno najdosadniji mogući kraj!',
+      'Pat pozicija, majstore! Ni pobeda ni poraz, čist antiklimaks.',
     ],
     general: [
       'Razmišljaš duže nego što meni treba da naučim kvantnu fiziku. Odigraj nešto!',
@@ -141,19 +182,32 @@ const FALLBACK_REACTIONS: Record<PersonaId, {
     ],
     capture: [
       'Jedna figura manje! Ali pravi rat tek počinje, šegrte.',
-      'Pala je kamena garda! Moja osveta će biti brza i nemilosrdna.',
+      'Srećan udarac, izazivaču! Moja garda će ubrzo uzvratiti dvostrukom merom!',
     ],
     check: [
+      'Drzak napad na moju krunu! Videćeš kako ser Valerius uzvraća iz opsade!',
+      'Samo privremena pretnja, šegrte — moj kralj ne poznaje strah!',
+    ],
+    aiCheck: [
       'Šah! Klekni pred mojim trupama, tvoj kralj drhti!',
       'Oseti gnev mojih figura — nema tog štita koji te može spasiti!',
     ],
     blunder: [
+      'Pala je kamena garda! Moja osveta će biti brza i nemilosrdna.',
       'Hahaha! Kakav naivan potez! Znao sam da nisi dorastao ovom dvoboju.',
       'Tvoja nepažnja je moja najveća gozba. Gledaj kako tvoja odbrana nestaje.',
     ],
     checkmate: [
+      'Nemoguće! Moj bedem je pao?! Čestitam, izazivaču... ali tražim novi dvoboj!',
+      'Pobedio si u ovoj bici, šegrte, ali ser Valerius se nikada ne predaje zauvek!',
+    ],
+    aiCheckmate: [
       'Kraj je! Sudbina je zapečaćena, pobeda pripada najdostojnijem!',
       'Tvoj kralj je pao u prašinu. Zauvek zapamti ovu lekciju!',
+    ],
+    draw: [
+      'Nerešeno?! Nijedan vitez danas nije poklekao — moraćemo ponovo da ukrstimo koplja!',
+      'Remi u dvorani izazova! Dostojan otpor, ali sledeći put neće biti milosti.',
     ],
     general: [
       'Moje trupe stoje postojano. Tvoji napadi su samo vetar u magli.',
@@ -217,32 +271,67 @@ class GeminiService {
   ): Promise<string> {
     const persona = PERSONAS[personaId] || PERSONAS.mentor;
     const pool = FALLBACK_REACTIONS[personaId] || FALLBACK_REACTIONS.mentor;
+    const isPlayerMove = detail.move ? detail.move.color === detail.playerColor : true;
+    const isCheckmate = Boolean(detail.isCheckmate ?? (detail.gameOver && detail.inCheck && !detail.drawReason));
+    const isDraw = Boolean(detail.gameOver && !isCheckmate);
 
     let fallback = getRandom(pool.general);
-    if (detail.gameOver) fallback = getRandom(pool.checkmate);
-    else if (detail.inCheck) fallback = getRandom(pool.check);
-    else if (detail.move?.capture) fallback = getRandom(pool.capture);
-    else if (detail.moveCount <= 4) fallback = getRandom(pool.opening);
+    if (isCheckmate) {
+      fallback = getRandom(isPlayerMove ? pool.checkmate : pool.aiCheckmate);
+    } else if (isDraw) {
+      fallback = getRandom(pool.draw);
+    } else if (detail.inCheck) {
+      fallback = getRandom(isPlayerMove ? pool.check : pool.aiCheck);
+    } else if (detail.move?.capture) {
+      fallback = getRandom(isPlayerMove ? pool.capture : pool.blunder);
+    } else if (detail.moveCount <= 4) {
+      fallback = getRandom(pool.opening);
+    }
 
     if (!this.client || !this.currentKey) {
       return fallback;
     }
 
     try {
+      const actorLabel = isPlayerMove ? 'IGRAČ (učenik/izazivač)' : 'AI PROTIVNIK';
+      const pieceAcc = detail.move ? PIECE_NAMES_SR[detail.move.pieceType] || detail.move.pieceType : 'figuru';
+      const specialTags: string[] = [];
+      if (detail.move?.castle) {
+        specialTags.push(detail.move.castle === 'k' ? 'izvršio malu rokadu' : 'izvršio veliku rokadu');
+      }
+      if (detail.move?.enPassant) {
+        specialTags.push('uzeo pešaka en passant');
+      } else if (detail.move?.capture) {
+        specialTags.push('pojeo protivničku figuru');
+      }
+      if (detail.move?.promotion) {
+        specialTags.push(`promovisao pešaka u ${PIECE_NAMES_SR[detail.move.promotion] || detail.move.promotion}`);
+      }
       const moveStr = detail.move
-        ? `${detail.move.color === 'w' ? 'Beli' : 'Crni'} je pomerio ${detail.move.pieceType} sa ${detail.move.fromSquare || '?'} na ${detail.move.toSquare || '?'}${detail.move.capture ? ' i POJEO protivničku figuru' : ''}.`
+        ? `${actorLabel} (${detail.move.color === 'w' ? 'Beli' : 'Crni'}) je pomerio ${pieceAcc} sa ${detail.move.fromSquare || '?'} na ${detail.move.toSquare || '?'}${specialTags.length ? ` i ${specialTags.join(', ')}` : ''}.`
         : 'Partija je u toku.';
+      const outcomeStr = isCheckmate
+        ? isPlayerMove
+          ? 'KRAJ PARTIJE: IGRAČ JE POBEDIO ŠAH-MATOM!'
+          : 'KRAJ PARTIJE: AI PROTIVNIK JE MATIRAO IGRAČA (igrač je izgubio).'
+        : isDraw
+          ? `KRAJ PARTIJE: REMI (${detail.drawReason === 'repetition' ? 'trostruko ponavljanje' : detail.drawReason === 'fifty-move' ? 'pravilo 50 poteza' : 'pat'}).`
+          : detail.inCheck
+            ? isPlayerMove
+              ? 'Igrač je dao ŠAH protivniku!'
+              : 'AI protivnik je dao ŠAH igraču!'
+            : 'Partija se nastavlja.';
 
       const prompt = `${persona.systemPrompt}
 
 Trenutno stanje u igri:
+- Igrač vodi: ${detail.playerColor === 'w' ? 'Bele figure' : 'Crne figure'}
 - Potez broj: ${detail.moveCount}
 - Poslednji potez: ${moveStr}
-- Da li je šah: ${detail.inCheck ? 'DA' : 'NE'}
-- Da li je mat/kraj: ${detail.gameOver ? 'DA' : 'NE'}
+- Ishod poteza: ${outcomeStr}
 ${boardDescription ? `- Dodatni opis table: ${boardDescription}` : ''}
 
-Napiši kratku reakciju (1-2 rečenice) u svom karakteru.`;
+Napiši kratku reakciju (1-2 rečenice) u svom karakteru, obraćajući se direktno igraču.`;
 
       const response = await this.client.models.generateContent({
         model: 'gemini-2.5-flash',

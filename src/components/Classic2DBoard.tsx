@@ -1,10 +1,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Chess2DPiece, PieceType, PieceColor } from './Chess2DPiece';
 
+export interface PromotionRequest {
+  fromR: number;
+  fromC: number;
+  toR: number;
+  toC: number;
+  color: PieceColor;
+}
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   onUndoMove: () => void;
+  onRequestPromotion: (req: PromotionRequest) => void;
 }
 
 interface PieceData {
@@ -15,6 +24,11 @@ interface PieceData {
 interface MoveCoord {
   r: number;
   c: number;
+  capture?: boolean;
+  enPassant?: boolean;
+  castle?: 'k' | 'q';
+  rookFromC?: number;
+  rookToC?: number;
 }
 
 interface LastMove {
@@ -24,11 +38,18 @@ interface LastMove {
   toC: number;
 }
 
-export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove }) => {
+type DrawReason = 'stalemate' | 'fifty-move' | 'repetition' | null;
+
+export const Classic2DBoard: React.FC<Props> = ({
+  isOpen,
+  onClose,
+  onUndoMove,
+  onRequestPromotion,
+}) => {
   const [board, setBoard] = useState<(PieceData | null)[][]>(() =>
     Array.from({ length: 8 }, () => Array(8).fill(null))
   );
-  const [selectedSquare, setSelectedSquare] = useState<MoveCoord | null>(null);
+  const [selectedSquare, setSelectedSquare] = useState<{ r: number; c: number } | null>(null);
   const [validMoves, setValidMoves] = useState<MoveCoord[]>([]);
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
   const [currentTurn, setCurrentTurn] = useState<PieceColor>('w');
@@ -36,6 +57,7 @@ export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove })
   const [flipped, setFlipped] = useState(false);
   const [inCheck, setInCheck] = useState(false);
   const [gameOver, setGameOver] = useState(false);
+  const [drawReason, setDrawReason] = useState<DrawReason>(null);
 
   const syncBoardFromEngine = useCallback(() => {
     const win = window as unknown as {
@@ -44,6 +66,7 @@ export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove })
         getCurrentTurn?: () => PieceColor;
         getPlayerColor?: () => PieceColor;
         getLastMove?: () => LastMove | null;
+        getDrawReason?: () => DrawReason;
         isKingInCheck?: (c?: PieceColor) => boolean;
         isGameOver?: () => boolean;
       };
@@ -67,83 +90,108 @@ export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove })
 
     const over = win.wizardChess.isGameOver?.() || false;
     setGameOver(over);
+
+    const dr = win.wizardChess.getDrawReason?.() || null;
+    setDrawReason(dr);
   }, []);
 
   useEffect(() => {
     if (!isOpen) return;
     syncBoardFromEngine();
 
-    const handleMove = () => {
+    const handleSync = () => {
       setSelectedSquare(null);
       setValidMoves([]);
       syncBoardFromEngine();
     };
 
-    const handleReset = () => {
-      setSelectedSquare(null);
-      setValidMoves([]);
-      syncBoardFromEngine();
-    };
-
-    const handleUndo = () => {
-      setSelectedSquare(null);
-      setValidMoves([]);
-      syncBoardFromEngine();
-    };
-
-    window.addEventListener('wizardchess:move', handleMove);
-    window.addEventListener('wizardchess:reset', handleReset);
-    window.addEventListener('wizardchess:undo', handleUndo);
+    window.addEventListener('wizardchess:move', handleSync);
+    window.addEventListener('wizardchess:reset', handleSync);
+    window.addEventListener('wizardchess:undo', handleSync);
 
     return () => {
-      window.removeEventListener('wizardchess:move', handleMove);
-      window.removeEventListener('wizardchess:reset', handleReset);
-      window.removeEventListener('wizardchess:undo', handleUndo);
+      window.removeEventListener('wizardchess:move', handleSync);
+      window.removeEventListener('wizardchess:reset', handleSync);
+      window.removeEventListener('wizardchess:undo', handleSync);
     };
   }, [isOpen, syncBoardFromEngine]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      } else if (e.key === '2') {
-        onClose();
-      } else if (e.key.toLowerCase() === 'u' || (e.ctrlKey && e.key.toLowerCase() === 'z')) {
-        onUndoMove();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose, onUndoMove]);
-
   if (!isOpen) return null;
 
+  const handleNewGame = () => {
+    const win = window as unknown as {
+      wizardChess?: { resetChessBoard?: (orientCamera?: boolean) => void };
+    };
+    win.wizardChess?.resetChessBoard?.(true);
+  };
+
+  const handleSwitchSide = () => {
+    const win = window as unknown as {
+      wizardChess?: { toggleSide?: () => boolean };
+    };
+    win.wizardChess?.toggleSide?.();
+  };
+
+  const handleTriggerAI = () => {
+    const win = window as unknown as {
+      wizardChess?: { triggerAIMoveNow?: () => boolean };
+    };
+    win.wizardChess?.triggerAIMoveNow?.();
+  };
+
   const handleSquareClick = (r: number, c: number) => {
+    if (gameOver || currentTurn !== playerColor) return;
+
     const win = window as unknown as {
       wizardChess?: {
-        executeChessMove?: (fromR: number, fromC: number, toR: number, toC: number) => boolean;
+        executeChessMove?: (
+          fromR: number,
+          fromC: number,
+          toR: number,
+          toC: number,
+          options?: { instant?: boolean; promotion?: PieceType }
+        ) => boolean;
         getLegalMovesForPiece?: (r: number, c: number) => MoveCoord[];
       };
     };
 
     const piece = board[r]?.[c];
 
-    // If already selected, check if clicked on a valid target square
+    // If already selected, check if clicked on a valid target square (or castling rook)
     if (selectedSquare) {
-      const isTarget = validMoves.some((m) => m.r === r && m.c === c);
-      if (isTarget) {
-        win.wizardChess?.executeChessMove?.(selectedSquare.r, selectedSquare.c, r, c);
+      const targetMove = validMoves.find(
+        (m) => (m.r === r && m.c === c) || (m.castle && m.r === r && m.rookFromC === c)
+      );
+      if (targetMove) {
+        const movingPiece = board[selectedSquare.r]?.[selectedSquare.c];
+        if (movingPiece?.type === 'pawn' && (targetMove.r === 0 || targetMove.r === 7)) {
+          onRequestPromotion({
+            fromR: selectedSquare.r,
+            fromC: selectedSquare.c,
+            toR: targetMove.r,
+            toC: targetMove.c,
+            color: movingPiece.color,
+          });
+          setSelectedSquare(null);
+          setValidMoves([]);
+          return;
+        }
+        win.wizardChess?.executeChessMove?.(
+          selectedSquare.r,
+          selectedSquare.c,
+          targetMove.r,
+          targetMove.c,
+          { instant: true }
+        );
         setSelectedSquare(null);
         setValidMoves([]);
         return;
       }
     }
 
-    // If clicked on piece of current turn
+    // If clicked on piece of player's turn
     if (piece && piece.color === currentTurn) {
       if (selectedSquare && selectedSquare.r === r && selectedSquare.c === c) {
-        // Deselect on re-click
         setSelectedSquare(null);
         setValidMoves([]);
       } else {
@@ -154,12 +202,20 @@ export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove })
       return;
     }
 
-    // Clicked elsewhere
     setSelectedSquare(null);
     setValidMoves([]);
   };
 
-  const isViewFlipped = flipped || playerColor === 'b';
+  const isCheckmate = gameOver && inCheck && !drawReason;
+  const isDraw = gameOver && !isCheckmate;
+  const drawLabel =
+    drawReason === 'repetition'
+      ? '🤝 REMI! Trostruko ponavljanje'
+      : drawReason === 'fifty-move'
+        ? '🤝 REMI! Pravilo 50 poteza'
+        : '🤝 PAT! Partija je završena remijem';
+
+  const isViewFlipped = flipped ? playerColor === 'w' : playerColor === 'b';
   const rowIndices = isViewFlipped ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0];
   const colIndices = isViewFlipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
   const fileLetters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
@@ -179,14 +235,44 @@ export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove })
               {currentTurn === 'w' ? 'Beli na potezu' : 'Crni na potezu'}
             </span>
             {inCheck && !gameOver && <span className="chess-2d-alert-check">⚠️ ŠAH!</span>}
-            {gameOver && <span className="chess-2d-alert-mate">👑 MAT! Partija je završena</span>}
+            {isCheckmate && (
+              <span className="chess-2d-alert-mate">
+                👑 ŠAH-MAT! Pobednik: {currentTurn === 'w' ? 'Crni' : 'Beli'}
+              </span>
+            )}
+            {isDraw && <span className="chess-2d-alert-draw">{drawLabel}</span>}
           </div>
           <div className="chess-2d-header-actions">
             <button
               type="button"
               className="chess-2d-btn"
+              onClick={handleNewGame}
+              title="Započni novu partiju"
+            >
+              🔄 Nova
+            </button>
+            <button
+              type="button"
+              className="chess-2d-btn"
+              onClick={handleSwitchSide}
+              title="Promeni stranu (Beli / Crni)"
+            >
+              ⮂ {playerColor === 'w' ? 'Crni' : 'Beli'}
+            </button>
+            <button
+              type="button"
+              className="chess-2d-btn"
+              onClick={handleTriggerAI}
+              disabled={gameOver}
+              title="Neka AI odigra potez"
+            >
+              ⚡ AI
+            </button>
+            <button
+              type="button"
+              className="chess-2d-btn"
               onClick={() => setFlipped((prev) => !prev)}
-              title="Okreni tablu (Flip board)"
+              title="Okreni tablu"
             >
               ⮀ Okreni
             </button>
@@ -196,7 +282,7 @@ export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove })
               onClick={onUndoMove}
               title="Vrati prethodni potez (U)"
             >
-              ⏳ Vrati potez
+              ⏳ Vrati
             </button>
             <button
               type="button"
@@ -218,7 +304,7 @@ export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove })
                   const piece = board[r]?.[c];
                   const isLight = (r + c) % 2 === 0;
                   const isSelected = selectedSquare?.r === r && selectedSquare?.c === c;
-                  const isLegalTarget = validMoves.some((m) => m.r === r && m.c === c);
+                  const legalTarget = validMoves.find((m) => m.r === r && m.c === c);
                   const isLastMoveSquare =
                     lastMove &&
                     ((lastMove.fromR === r && lastMove.fromC === c) ||
@@ -250,9 +336,11 @@ export const Classic2DBoard: React.FC<Props> = ({ isOpen, onClose, onUndoMove })
                       {piece && <Chess2DPiece type={piece.type} color={piece.color} />}
 
                       {/* Legal target indicators */}
-                      {isLegalTarget && (
+                      {legalTarget && (
                         <div
-                          className={`chess-2d-target-dot ${piece ? 'target-capture' : 'target-empty'}`}
+                          className={`chess-2d-target-dot ${
+                            legalTarget.capture || piece ? 'target-capture' : 'target-empty'
+                          }`}
                         />
                       )}
                     </div>
