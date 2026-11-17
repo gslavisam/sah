@@ -220,7 +220,7 @@ class GeminiService {
 
     let fallback = getRandom(pool.general);
     if (detail.gameOver) fallback = getRandom(pool.checkmate);
-    else if (detail.inCheck) fallback = getRandom(pool.checkmark ?? pool.check);
+    else if (detail.inCheck) fallback = getRandom(pool.check);
     else if (detail.move?.capture) fallback = getRandom(pool.capture);
     else if (detail.moveCount <= 4) fallback = getRandom(pool.opening);
 

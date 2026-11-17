@@ -17,7 +17,8 @@ index.html
             ├── Academy ── puzzleCatalog
             ├── sceneThemes ── tipizirane postavke ambijenta
             ├── sceneEnvironments ── proceduralne 3D grupe ambijenta
-            └── voiceService ── lokalni MP3 audio
+            ├── voiceService ── lokalni MP3 audio
+             └── soundService ── proceduralni Web Audio zvučni efekti (SFX)
 
 src/App.tsx ── initWizardChess()
   └── src/wizardChessEngine.js
@@ -67,6 +68,7 @@ Engine očekuje da React prvo prikaže HUD elemente koje zatim pronalazi preko I
 | [src/services/sceneThemes.ts](./src/services/sceneThemes.ts) | Tipizirane postavke pozadine, magle, svetala i tona kamenih materijala za teme `mentor`, `roast` i `rival`. |
 | [src/services/progressionService.ts](./src/services/progressionService.ts) | XP, nivoi, titule, nizovi i statistika igrača; čuvanje u `localStorage`; obaveštavanje React pretplatnika. |
 | [src/services/voiceService.ts](./src/services/voiceService.ts) | Uključivanje/isključivanje govora, normalizacija teksta, povezivanje gotovih poruka sa MP3 fajlovima i puštanje zvuka. |
+| [src/services/soundService.ts](./src/services/soundService.ts) | Proceduralni Web Audio zvučni efekti za pomeranje, uzimanje figura, šah, mat i undo. |
 | [src/services/puzzleCatalog.ts](./src/services/puzzleCatalog.ts) | Tipizirani podaci 12 lokalnih mat-zagonetki: pozicija, provereni mat-potez, strana na potezu, tri nagoveštaja i objašnjenje. |
 | [src/services/academyCatalog.ts](./src/services/academyCatalog.ts) | Kurirani edukativni kvizovi: 12 poznatih partija, 12 otvaranja i 12 strategijskih lekcija, svaka sa objašnjenjem odgovora. |
 | [src/services/academyProgression.ts](./src/services/academyProgression.ts) | Čuva jedinstvene završene lekcije i zagonetke u `localStorage`; ponovljena aktivnost ne povećava progres. |

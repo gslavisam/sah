@@ -5,16 +5,18 @@ import { AIBubble } from './components/AIBubble';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { PlayerLevelBar } from './components/PlayerLevelBar';
 import { Academy } from './components/Academy';
+import { Classic2DBoard } from './components/Classic2DBoard';
 import { PERSONAS, PersonaId, geminiService, MoveEventDetail } from './services/geminiService';
+import { soundService } from './services/soundService';
 import { progressionService } from './services/progressionService';
 import type { SceneThemeId } from './services/sceneThemes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 
-type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski';
+type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'srpski-kraljevski';
 type AIDifficulty = 'easy' | 'medium' | 'hard';
 type CameraView = 'player' | 'top';
 
-const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski'];
+const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski', 'srpski-kraljevski'];
 const AI_DIFFICULTY_ORDER: AIDifficulty[] = ['easy', 'medium', 'hard'];
 const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   wizard: 'Čarobnjački',
@@ -22,7 +24,8 @@ const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   dragon: 'Zmajevi i vitezovi',
   medieval: 'Srednji vek',
   vitez: 'Vitez',
-  srpski: 'Srpski'
+  srpski: 'Srpski',
+  'srpski-kraljevski': 'Srpski kraljevski'
 };
 const AI_DIFFICULTY_NAMES: Record<AIDifficulty, string> = {
   easy: 'Lako',
@@ -67,6 +70,7 @@ export default function App() {
   const [academyFeedback, setAcademyFeedback] = useState<'idle' | 'wrong' | 'solved'>('idle');
   const [academyHintCount, setAcademyHintCount] = useState(0);
   const [academyError, setAcademyError] = useState<string | null>(null);
+  const [is2DMode, setIs2DMode] = useState(false);
 
   const applySceneTheme = (themeId: SceneThemeId) => {
     const win = window as Window & {
@@ -166,6 +170,7 @@ export default function App() {
     const win = window as unknown as { wizardChess?: { undoPlayerMove?: () => boolean } };
     const success = win.wizardChess?.undoPlayerMove?.();
     if (success) {
+      soundService.playUndo();
       setIsLoadingAI(true);
       try {
         const reaction = await geminiService.getUndoReaction(selectedPersonaRef.current);
@@ -182,6 +187,17 @@ export default function App() {
     const handleMoveEvent = async (e: Event) => {
       const customEvt = e as CustomEvent<MoveEventDetail>;
       if (!customEvt.detail) return;
+
+      // Play tactical stone SFX based on move outcome
+      if (customEvt.detail.gameOver) {
+        soundService.playCheckmate();
+      } else if (customEvt.detail.inCheck) {
+        soundService.playCheck();
+      } else if (customEvt.detail.move?.capture) {
+        soundService.playCapture();
+      } else {
+        soundService.playMove();
+      }
 
       // Award XP to player when a move completes
       progressionService.awardMove(
@@ -325,6 +341,10 @@ export default function App() {
         if ((e.target as HTMLElement)?.tagName !== 'INPUT') {
           handleUndoMove();
         }
+      } else if (e.key === '2') {
+        if ((e.target as HTMLElement)?.tagName !== 'INPUT') {
+          setIs2DMode((prev) => !prev);
+        }
       }
     };
     const handleResize = () => {
@@ -441,71 +461,61 @@ export default function App() {
           />
         </div>
 
-        <button
-          type="button"
-          className={`hud-btn mobile-controls-trigger ${mobileSheetOpen ? 'active' : ''}`}
-          id="btn-mobile-controls"
-          aria-expanded={mobileSheetOpen}
-          aria-controls="hud-right"
-          onClick={() => setMobileSheetOpen((prev) => !prev)}
-        >
-          {mobileSheetOpen ? 'Close' : 'Controls'}
-        </button>
+      </div>
 
+      {/* ── Bottom Dock: 3 Capsules (Variant B) ── */}
+      <div
+        className={`mobile-sheet-backdrop ${mobileSheetOpen ? 'open' : ''}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setMobileSheetOpen(false);
+        }}
+        aria-hidden="true"
+      ></div>
+
+      <div id="hud-dock" className={mobileSheetOpen ? 'mobile-sheet-open' : ''}>
+        {/* Mobile sheet handle + header (hidden on desktop) */}
         <div
-          className={`mobile-sheet-backdrop ${mobileSheetOpen ? 'open' : ''}`}
+          className="mobile-sheet-handle-wrap"
           onClick={(e) => {
             e.stopPropagation();
             setMobileSheetOpen(false);
           }}
           aria-hidden="true"
-        ></div>
-
-        <div
-          className={`hud-group ${mobileSheetOpen ? 'mobile-sheet-open' : ''}`}
-          id="hud-right"
         >
-          <div
-            className="mobile-sheet-handle-wrap"
+          <div className="mobile-sheet-handle"></div>
+        </div>
+        <div className="mobile-sheet-header">
+          <span className="mobile-sheet-title">Kontrole</span>
+          <button
+            type="button"
+            className="mobile-sheet-close"
+            id="btn-mobile-sheet-close"
             onClick={(e) => {
               e.stopPropagation();
               setMobileSheetOpen(false);
             }}
-            aria-hidden="true"
+            aria-label="Zatvori kontrole"
           >
-            <div className="mobile-sheet-handle"></div>
-          </div>
+            Zatvori ✕
+          </button>
+        </div>
 
-          <div className="mobile-sheet-header">
-            <span className="mobile-sheet-title">Controls</span>
-            <button
-              type="button"
-              className="mobile-sheet-close"
-              id="btn-mobile-sheet-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                setMobileSheetOpen(false);
-              }}
-              aria-label="Close Controls"
-            >
-              Close ✕
-            </button>
-          </div>
+        {/* Mobile persona picker (hidden on desktop) */}
+        <div className="mobile-only-persona-picker">
+          <div className="mobile-sheet-section-label">AI Mentor &amp; Ličnost</div>
+          <PersonaSelector
+            selectedPersona={selectedPersona}
+            onSelectPersona={(id) => {
+              handleSelectPersona(id);
+              setMobileSheetOpen(false);
+            }}
+          />
+        </div>
 
-          {/* Mobile-Only Persona Selector (Hidden on Desktop) */}
-          <div className="mobile-only-persona-picker">
-            <div className="mobile-sheet-section-label">AI Mentor &amp; Ličnost</div>
-            <PersonaSelector
-              selectedPersona={selectedPersona}
-              onSelectPersona={(id) => {
-                handleSelectPersona(id);
-                setMobileSheetOpen(false);
-              }}
-            />
-            <div className="hud-divider" aria-hidden="true"></div>
-          </div>
-          <div className="mobile-sheet-section-label">Game Actions</div>
-
+        {/* ── Capsule 1: Režimi ── */}
+        <div className="dock-capsule dock-modes">
+          <span className="dock-capsule-label">Režimi</span>
           <button
             type="button"
             className="hud-btn academy-launch-button"
@@ -515,44 +525,25 @@ export default function App() {
               setMobileSheetOpen(false);
             }}
           >
-            ✦ Šahovska akademija
+            ✦ Akademija
           </button>
           <button
             type="button"
-            className="hud-btn"
-            id="btn-piece-set"
-            title="Promeni izgled šahovskih figura"
-            aria-label={`Promeni set figura. Trenutni set: ${PIECE_SET_NAMES[selectedPieceSet]}`}
-            onClick={handleTogglePieceSet}
+            className={`hud-btn btn-toggle-2d ${is2DMode ? 'active' : ''}`}
+            id="btn-toggle-2d"
+            title="Prebaci u klasičnu 2D tablu (Prečica: 2)"
+            onClick={() => {
+              setIs2DMode((prev) => !prev);
+              setMobileSheetOpen(false);
+            }}
           >
-            ♟ Set figura: {PIECE_SET_NAMES[selectedPieceSet]}
+            {is2DMode ? '🏰 3D' : '⬚ 2D'}
           </button>
-          <button
-            type="button"
-            className="hud-btn"
-            id="btn-ai-difficulty"
-            title="Promeni težinu protivnika"
-            aria-label={`Promeni težinu AI protivnika. Trenutna težina: ${AI_DIFFICULTY_NAMES[aiDifficulty]}`}
-            onClick={handleToggleAIDifficulty}
-          >
-            ⚔ Težina: {AI_DIFFICULTY_NAMES[aiDifficulty]}
-          </button>
-          <button
-            className="hud-btn"
-            id="btn-side-toggle"
-            title="Switch between Playing as White and Playing as Black"
-            onClick={() => setMobileSheetOpen(false)}
-          >
-            Play as Black
-          </button>
-          <button
-            className="hud-btn"
-            id="btn-ai-move"
-            title="Let the AI make the next move immediately"
-            onClick={() => setMobileSheetOpen(false)}
-          >
-            AI Move
-          </button>
+        </div>
+
+        {/* ── Capsule 2: Partija (centar) ── */}
+        <div className="dock-capsule dock-game">
+          <span className="dock-capsule-label">Partija</span>
           <button
             className="hud-btn"
             id="btn-undo-move"
@@ -562,51 +553,94 @@ export default function App() {
               setMobileSheetOpen(false);
             }}
           >
-            ⏳ Vrati potez
+            ⏳ Vrati
+          </button>
+          <button
+            className="hud-btn"
+            id="btn-ai-move"
+            title="Neka AI odigra sledeći potez"
+            onClick={() => setMobileSheetOpen(false)}
+          >
+            ⚡ AI
           </button>
           <button
             className="hud-btn"
             id="btn-reset"
-            title="Start a fresh game on the altar"
+            title="Započni novu partiju"
             onClick={() => setMobileSheetOpen(false)}
           >
-            New Game
+            🔄 Nova
           </button>
+        </div>
 
-          <div className="hud-divider" aria-hidden="true"></div>
-          <div className="mobile-sheet-section-label">
-            <span>Camera View</span>
-            <span className="mobile-sheet-section-sub">Tap to switch view</span>
-          </div>
-
+        {/* ── Capsule 3: Podešavanja ── */}
+        <div className="dock-capsule dock-settings">
+          <span className="dock-capsule-label">Podešavanja</span>
+          <button
+            type="button"
+            className="hud-btn"
+            id="btn-piece-set"
+            title="Promeni izgled šahovskih figura"
+            aria-label={`Promeni set figura. Trenutni set: ${PIECE_SET_NAMES[selectedPieceSet]}`}
+            onClick={handleTogglePieceSet}
+          >
+            ♟ {PIECE_SET_NAMES[selectedPieceSet]}
+          </button>
+          <button
+            type="button"
+            className="hud-btn"
+            id="btn-ai-difficulty"
+            title="Promeni težinu protivnika"
+            aria-label={`Promeni težinu AI protivnika. Trenutna težina: ${AI_DIFFICULTY_NAMES[aiDifficulty]}`}
+            onClick={handleToggleAIDifficulty}
+          >
+            ⚔ {AI_DIFFICULTY_NAMES[aiDifficulty]}
+          </button>
+          <button
+            className="hud-btn"
+            id="btn-side-toggle"
+            title="Igraj kao beli ili crni"
+            onClick={() => setMobileSheetOpen(false)}
+          >
+            ⮂ Strana
+          </button>
           <button
             type="button"
             className={`hud-btn ${cameraView === 'player' || cameraView === 'top' ? 'active' : ''}`}
             id="btn-camera-view"
-            title="Switch between Player Cam and Overhead"
+            title="Prebaci kameru između igrača i odozgo"
             aria-label={`Camera view: ${cameraView === 'player' ? 'Player Cam' : 'Overhead'}. Click to switch view.`}
             onClick={handleToggleCameraView}
           >
-            {cameraView === 'player' ? 'Player Cam' : 'Overhead'}
+            🎥 {cameraView === 'player' ? 'Igrač' : 'Odozgo'}
           </button>
-
-          <div className="hud-divider" aria-hidden="true"></div>
-          <div className="mobile-sheet-section-label">Display &amp; Gestures</div>
-
           <button
             className="hud-btn"
             id="btn-hide-ui"
-            title="Toggle HUD visibility (Shortcut: H)"
+            title="Sakrij/prikaži interfejs (Prečica: H)"
             onClick={() => setMobileSheetOpen(false)}
           >
-            Hide UI [H]
+            👁 Sakrij [H]
           </button>
+        </div>
 
-          <div className="mobile-sheet-hint">
-            <strong>Touch:</strong> Tap Piece to Move &nbsp;•&nbsp; 1-Finger Drag: Orbit &nbsp;•&nbsp; 2-Finger Drag: Pan &nbsp;•&nbsp; Pinch: Zoom
-          </div>
+        {/* Mobile touch hint (hidden on desktop) */}
+        <div className="mobile-sheet-hint">
+          <strong>Dodir:</strong> Tap za potez &nbsp;•&nbsp; 1 prst: Rotacija &nbsp;•&nbsp; 2 prsta: Pan &nbsp;•&nbsp; Pinch: Zoom
         </div>
       </div>
+
+      {/* Mobile controls trigger button (visible only on mobile) */}
+      <button
+        type="button"
+        className={`hud-btn mobile-controls-trigger ${mobileSheetOpen ? 'active' : ''}`}
+        id="btn-mobile-controls"
+        aria-expanded={mobileSheetOpen}
+        aria-controls="hud-dock"
+        onClick={() => setMobileSheetOpen((prev) => !prev)}
+      >
+        {mobileSheetOpen ? '✕' : '☰'}
+      </button>
 
       <div id="hud-bottom">
         <div className="hint-pill" id="controls-hint">
@@ -654,6 +688,12 @@ export default function App() {
           onRetry={handleRetryPuzzle}
         />
       ) : null}
+
+      <Classic2DBoard
+        isOpen={is2DMode}
+        onClose={() => setIs2DMode(false)}
+        onUndoMove={handleUndoMove}
+      />
     </>
   );
 }

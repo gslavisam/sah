@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ACADEMY_AREAS, LESSONS_BY_AREA, type AcademyAreaId } from '../services/academyCatalog';
 import { academyProgression } from '../services/academyProgression';
+import { soundService } from '../services/soundService';
 import { PUZZLES } from '../services/puzzleCatalog';
 
 type AcademyProps = {
@@ -93,10 +94,15 @@ export function Academy({
   const answerLesson = () => {
     if (!selectedLesson || selectedAnswer === null) return;
     setAnswerSubmitted(true);
-    if (selectedAnswer === selectedLesson.answer && selectedArea && selectedArea !== 'puzzles') {
-      if (academyProgression.markCompleted(selectedArea, selectedLesson.id)) {
-        setProgressVersion((version) => version + 1);
+    if (selectedAnswer === selectedLesson.answer) {
+      soundService.playCheckmate();
+      if (selectedArea && selectedArea !== 'puzzles') {
+        if (academyProgression.markCompleted(selectedArea, selectedLesson.id)) {
+          setProgressVersion((version) => version + 1);
+        }
       }
+    } else {
+      soundService.playCheck();
     }
   };
 

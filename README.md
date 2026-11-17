@@ -5,7 +5,7 @@
 ## Mogućnosti
 
 - 3D šahovska tabla, modelovane figure i animacije poteza i uzimanja figura.
-- Šest stilova figura: čarobnjački GLB, proceduralni antički, „Zmajevi i vitezovi“, proceduralni „Srednji vek“ i zasebni GLB setovi „Vitez“ i „Srpski“, svaki sa belim i crnim modelima; izbor se čuva u pregledaču.
+- Sedam stilova figura: čarobnjački GLB, proceduralni antički, „Zmajevi i vitezovi“, proceduralni „Srednji vek“ i zasebni GLB setovi „Vitez“, „Srpski“ i „Srpski kraljevski“, svaki sa belim i crnim modelima; izbor se čuva u pregledaču.
 - Igra protiv lokalnog šahovskog protivnika; izbor igranja belim ili crnim figurama.
 - Četiri pogleda kamere: igrački, odozgo, bočni i široki pogled na katedralu.
 - Tri AI komentatora: Alistair (mentor), Grix (goblin) i Valerius (rival).
@@ -55,6 +55,7 @@ Vite ugrađuje ovu vrednost u JavaScript aplikacije u pregledaču. Zato nemoj ko
 - **AI Move** pokreće potez protivnika.
 - **New Game** započinje novu partiju.
 - **Set figura** ciklično menja izgled figura bez resetovanja partije.
+- **2D Klasik / 3D Katedrala** (ili prečica **2**) prebacuje prikaz između pune 3D katedrale i klasične 2D Staunton šahovske table sa oznakama polja i indikatorima legalnih poteza.
 - **Šahovska akademija** otvara četiri oblasti i 48 kratkih aktivnosti; kviz lekcije nude sledeću lekciju, a zagonetke koriste tablu i vraćaju prethodnu partiju pri izlasku.
 - **U** ili **Ctrl+Z** vraća prethodni potez.
 - Izaberi jedan od četiri dugmeta kamere za promenu ugla. Klik na već aktivan pogled menja orijentaciju.
