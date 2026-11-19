@@ -1,5 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
-
 export type PersonaId = 'mentor' | 'roast' | 'rival';
 
 export interface Persona {
@@ -221,46 +219,46 @@ function getRandom<T>(arr: T[]): T {
 }
 
 class GeminiService {
-  private client: GoogleGenAI | null = null;
-  private currentKey: string = '';
+  private serverConfigured: boolean | null = null;
 
-  constructor() {
-    this.initClient();
-  }
-
-  private initClient() {
-    const key =
-      localStorage.getItem('wizard_gemini_api_key') ||
-      (typeof process !== 'undefined' && (process.env.GEMINI_API_KEY || process.env.API_KEY)) ||
-      '';
-
-    if (key && key !== this.currentKey) {
-      this.currentKey = key;
-      try {
-        this.client = new GoogleGenAI({ apiKey: key });
-      } catch (e) {
-        console.warn('Gemini client init error:', e);
-        this.client = null;
-      }
+  public async checkServerStatus(): Promise<boolean> {
+    if (this.serverConfigured !== null) {
+      return this.serverConfigured;
     }
-  }
-
-  public getApiKey(): string {
-    return this.currentKey;
-  }
-
-  public setApiKey(key: string) {
-    const trimmed = key.trim();
-    if (trimmed) {
-      localStorage.setItem('wizard_gemini_api_key', trimmed);
-    } else {
-      localStorage.removeItem('wizard_gemini_api_key');
-    }
-    this.currentKey = trimmed;
     try {
-      this.client = trimmed ? new GoogleGenAI({ apiKey: trimmed }) : null;
+      const res = await fetch('/api/gemini/status');
+      if (!res.ok) {
+        this.serverConfigured = false;
+        return false;
+      }
+      const data = (await res.json()) as { configured?: boolean };
+      this.serverConfigured = Boolean(data?.configured);
+      return this.serverConfigured;
     } catch {
-      this.client = null;
+      return false;
+    }
+  }
+
+  private async generateViaProxy(prompt: string): Promise<string | null> {
+    if (this.serverConfigured === false) {
+      return null;
+    }
+    try {
+      const res = await fetch('/api/gemini/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!res.ok) {
+        return null;
+      }
+      const data = (await res.json()) as { text?: string | null; configured?: boolean };
+      if (typeof data?.configured === 'boolean') {
+        this.serverConfigured = data.configured;
+      }
+      return data?.text?.trim() || null;
+    } catch {
+      return null;
     }
   }
 
@@ -288,7 +286,8 @@ class GeminiService {
       fallback = getRandom(pool.opening);
     }
 
-    if (!this.client || !this.currentKey) {
+    const configured = await this.checkServerStatus();
+    if (!configured) {
       return fallback;
     }
 
@@ -333,12 +332,7 @@ ${boardDescription ? `- Dodatni opis table: ${boardDescription}` : ''}
 
 Napiši kratku reakciju (1-2 rečenice) u svom karakteru, obraćajući se direktno igraču.`;
 
-      const response = await this.client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-      });
-
-      const text = response.text?.trim();
+      const text = await this.generateViaProxy(prompt);
       return text || fallback;
     } catch (err) {
       console.warn('Gemini generateContent error, using fallback:', err);
@@ -367,7 +361,8 @@ Napiši kratku reakciju (1-2 rečenice) u svom karakteru, obraćajući se direkt
 
     const fallback = getRandom(undoFallbacks[personaId] || undoFallbacks.mentor);
 
-    if (!this.client || !this.currentKey) {
+    const configured = await this.checkServerStatus();
+    if (!configured) {
       return fallback;
     }
 
@@ -377,12 +372,8 @@ Napiši kratku reakciju (1-2 rečenice) u svom karakteru, obraćajući se direkt
 Igrač je upravo iskoristio funkciju VRATI POTEZ (Undo / Time Rewind).
 Prokomentariši to u 1 do 2 kratke rečenice u svom karakteru!`;
 
-      const response = await this.client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-      });
-
-      return response.text?.trim() || fallback;
+      const text = await this.generateViaProxy(prompt);
+      return text || fallback;
     } catch {
       return fallback;
     }
@@ -395,7 +386,8 @@ Prokomentariši to u 1 do 2 kratke rečenice u svom karakteru!`;
   ): Promise<string> {
     const persona = PERSONAS[personaId] || PERSONAS.mentor;
 
-    if (!this.client || !this.currentKey) {
+    const configured = await this.checkServerStatus();
+    if (!configured) {
       const offlineHints = [
         '💡 Obrati pažnju na kontrolu centralnih polja i sigurnost svog kralja pre nego što kreneš u napad!',
         '💡 Proveri da li neka od tvojih figura stoji nebranjena — dobar igrač uvek prvo štiti svoje trupe.',
@@ -414,12 +406,8 @@ Igrač je tražio SAVET za sledeći potez.
 
 Daj početniku jedan prijateljski, jasan savet šta da traži na tabli ili koju figuru da aktivira. Maksimalno 2 rečenice!`;
 
-      const response = await this.client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-      });
-
-      return response.text?.trim() || '💡 Pazi na centar table i uvek proveri gde protivnik može da uzvrati!';
+      const text = await this.generateViaProxy(prompt);
+      return text || '💡 Pazi na centar table i uvek proveri gde protivnik može da uzvrati!';
     } catch (err) {
       console.warn('Gemini hint error, using fallback:', err);
       return '💡 Pokušaj da aktiviraš figuru koja do sada nije učestvovala u borbi!';

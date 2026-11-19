@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { PERSONAS, PersonaId, geminiService } from '../services/geminiService';
+import { PERSONAS, PersonaId } from '../services/geminiService';
 import { voiceService } from '../services/voiceService';
 
 interface Props {
   personaId: PersonaId;
   message: string;
   isLoading: boolean;
-  onOpenApiKeyModal: () => void;
   onRequestHint: () => void;
 }
 
@@ -14,13 +13,11 @@ export const AIBubble: React.FC<Props> = ({
   personaId,
   message,
   isLoading,
-  onOpenApiKeyModal,
   onRequestHint,
 }) => {
   const [minimized, setMinimized] = useState(false);
   const [voiceActive, setVoiceActive] = useState(voiceService.isEnabled());
   const persona = PERSONAS[personaId] || PERSONAS.mentor;
-  const hasKey = Boolean(geminiService.getApiKey());
 
   const handleToggleVoice = () => {
     const newState = voiceService.toggleVoice();
@@ -73,14 +70,6 @@ export const AIBubble: React.FC<Props> = ({
             title="Zatraži jednostavan savet za početnike"
           >
             💡 Savet
-          </button>
-          <button
-            type="button"
-            className={`ai-action-btn key-btn ${hasKey ? 'active' : ''}`}
-            onClick={onOpenApiKeyModal}
-            title={hasKey ? 'Gemini AI povezan' : 'Poveži Gemini API Ključ'}
-          >
-            {hasKey ? '⚡ Gemini' : '🔑 Ključ'}
           </button>
           <button
             type="button"

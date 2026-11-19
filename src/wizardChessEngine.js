@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { createSceneEnvironments } from './services/sceneEnvironments';
 import { SCENE_THEMES } from './services/sceneThemes';
+import { createOpponentHologramSystem } from './services/opponentHolograms';
 
 /** @type {any} */
 const THREE = THREE_NS;
@@ -74,6 +75,8 @@ export function initWizardChess() {
     for (const group of Object.values(sceneThemeGroups)) {
       scene.add(group);
     }
+    const opponentHologram = createOpponentHologramSystem();
+    scene.add(opponentHologram.group);
     let cathedralRoot = null;
 
     // Self-contained Cathedral PMREM Environment (inspired by three-gpu-pathtracer & realism-effects)
@@ -308,6 +311,7 @@ export function initWizardChess() {
       }
 
       activeSceneTheme = themeId;
+      opponentHologram.setPersona(themeId);
       renderer.shadowMap.needsUpdate = true;
       return true;
     }
@@ -2692,6 +2696,7 @@ export function initWizardChess() {
         aiAutoPlay
       };
       academyMode = true;
+      opponentHologram.setModeVisible(false);
       return setAcademyPosition(pieces, turn);
     }
 
@@ -2709,6 +2714,8 @@ export function initWizardChess() {
         return false;
       }
       moveHistory = saved.moveHistory;
+      opponentHologram.setPlayerSide(playerColor, true);
+      opponentHologram.setModeVisible(!is2DModeActive);
       maybeScheduleAIMove();
       return true;
     }
@@ -2757,6 +2764,10 @@ export function initWizardChess() {
         notifyPrimaryCameraView();
         setCameraForSide(viewSide, false);
       }
+
+      opponentHologram.setPlayerSide(playerColor, false);
+      opponentHologram.setThinking(false);
+      opponentHologram.triggerReaction('idle');
 
       renderer.shadowMap.needsUpdate = true;
       updateTurnUI();
@@ -3671,6 +3682,21 @@ export function initWizardChess() {
                 })
               : new CustomEvent('wizardchess:move', { detail: moveDetail })
           );
+
+          if (!academyMode) {
+            opponentHologram.setThinking(false);
+            if (isMate) {
+              opponentHologram.triggerReaction(piece.color === playerColor ? 'defeat' : 'victory');
+            } else if (drawReason) {
+              opponentHologram.triggerReaction('draw');
+            } else if (nextInCheck) {
+              opponentHologram.triggerReaction('check');
+            } else if (isCapture) {
+              opponentHologram.triggerReaction(piece.color === playerColor ? 'playerCapture' : 'aiCapture');
+            } else {
+              opponentHologram.triggerReaction(piece.color === playerColor ? 'playerMove' : 'aiMove');
+            }
+          }
         }
 
         maybeScheduleAIMove();
@@ -4211,6 +4237,7 @@ export function initWizardChess() {
 
       const aiColor = playerColor === 'w' ? 'b' : 'w';
       if (currentTurn === aiColor) {
+        opponentHologram.setThinking(true);
         aiTimer = setTimeout(() => {
           aiTimer = null;
           if (
@@ -4223,6 +4250,8 @@ export function initWizardChess() {
             triggerAIMoveNow();
           }
         }, 540);
+      } else {
+        opponentHologram.setThinking(false);
       }
     }
 
@@ -4262,6 +4291,9 @@ export function initWizardChess() {
         const entry = moveHistory.pop();
         restoreBoardSnapshot(entry.snapshot);
       }
+
+      opponentHologram.setThinking(false);
+      opponentHologram.triggerReaction('undo');
 
       if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
         window.dispatchEvent(
@@ -4895,6 +4927,7 @@ export function initWizardChess() {
           playerCamSide = playerColor === 'b' ? 'b' : 'w';
         }
         primaryCameraView = 'player';
+        opponentHologram.setCameraView('player');
         setActiveCamButton('btn-camera-view');
         notifyPrimaryCameraView();
         setCameraForSide(playerCamSide, false);
@@ -4906,6 +4939,7 @@ export function initWizardChess() {
           overheadCamSide = playerColor === 'b' ? 'b' : 'w';
         }
         primaryCameraView = 'top';
+        opponentHologram.setCameraView('top');
         setActiveCamButton('btn-camera-view');
         notifyPrimaryCameraView();
         const zSign = overheadCamSide === 'b' ? -1 : 1;
@@ -4967,6 +5001,7 @@ export function initWizardChess() {
         completeCurrentMoveImmediately();
       }
       is2DModeActive = next;
+      opponentHologram.setModeVisible(!is2DModeActive && !academyMode);
       if (!is2DModeActive) {
         renderer.shadowMap.needsUpdate = true;
       }
@@ -5038,6 +5073,7 @@ export function initWizardChess() {
         );
       },
       getLegalMovesForPiece: (r, c) => getLegalMovesForPiece(r, c),
+      getOpponentHologramState: () => opponentHologram.getState(),
       getPlayerColor: () => playerColor,
       getCurrentTurn: () => currentTurn,
       getLastMove: () => moveHistory[moveHistory.length - 1]?.move || null,
@@ -5288,6 +5324,7 @@ export function initWizardChess() {
       for (const group of Object.values(sceneThemeGroups)) {
         if (group.visible) group.userData.animate?.(elapsedTotal);
       }
+      opponentHologram.update(dt, elapsedTotal);
       const prevCamPos = camera.position.clone();
 
       for (const mixer of activeMixers) {

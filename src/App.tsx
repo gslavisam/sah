@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { initWizardChess } from './wizardChessEngine.js';
 import { PersonaSelector } from './components/PersonaSelector';
 import { AIBubble } from './components/AIBubble';
-import { ApiKeyModal } from './components/ApiKeyModal';
 import { PlayerLevelBar } from './components/PlayerLevelBar';
 import { Academy } from './components/Academy';
 import { Classic2DBoard, type PromotionRequest } from './components/Classic2DBoard';
@@ -84,7 +83,6 @@ export default function App() {
     'Pozdrav, šegrte! Ja sam Alistair. Tu sam da te vodim i učinim svaki potez jasnim.'
   );
   const [isLoadingAI, setIsLoadingAI] = useState(false);
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
   const [academyVisible, setAcademyVisible] = useState(false);
   const [academyView, setAcademyView] = useState<'home' | 'puzzle'>('home');
   const [academyPuzzleId, setAcademyPuzzleId] = useState<string | null>(null);
@@ -528,18 +526,7 @@ export default function App() {
         personaId={selectedPersona}
         message={aiMessage}
         isLoading={isLoadingAI}
-        onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
         onRequestHint={handleRequestHint}
-      />
-
-      {/* API Key Modal */}
-      <ApiKeyModal
-        isOpen={isApiKeyModalOpen}
-        onClose={() => setIsApiKeyModalOpen(false)}
-        onSaved={() => {
-          const p = PERSONAS[selectedPersona];
-          setAiMessage(`✨ Gemini AI je uspešno aktiviran! ${p.name} je spreman za direktan razgovor.`);
-        }}
       />
 
       <button

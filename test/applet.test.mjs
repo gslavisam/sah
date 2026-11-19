@@ -286,3 +286,19 @@ test('Special chess rules, 2D instant sync, single Undo shortcut, and player-onl
   assert.ok(gemini.includes('isPlayerMove ? pool.capture : pool.blunder'), 'Persona fallback must use blunder lines when AI captures player piece');
 });
 
+test('Opponent hologram visualizes all three personas across from player and reacts to match events', () => {
+  const hologramSrc = fs.readFileSync(path.join(ROOT, 'src/services/opponentHolograms.ts'), 'utf-8');
+  const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+
+  assert.ok(hologramSrc.includes('export function createOpponentHologramSystem()'));
+  assert.ok(hologramSrc.includes('createMentorCharacter'));
+  assert.ok(hologramSrc.includes('createRoastCharacter'));
+  assert.ok(hologramSrc.includes('createRivalCharacter'));
+  assert.ok(hologramSrc.includes("currentPlayerColor === 'w' ? -OPPONENT_SIDE_Z : OPPONENT_SIDE_Z"));
+  assert.ok(engine.includes('opponentHologram.setPersona(themeId)'));
+  assert.ok(engine.includes('opponentHologram.setPlayerSide(playerColor'));
+  assert.ok(engine.includes('opponentHologram.triggerReaction('));
+  assert.ok(engine.includes('opponentHologram.update(dt, elapsedTotal)'));
+});
+
+

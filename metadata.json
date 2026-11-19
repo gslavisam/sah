@@ -2,5 +2,7 @@
   "name": "Wizard Chess 3D",
   "description": "Interactive 3D Chess with sculpted stone pieces, cinematic melee captures, stone shatter physics, and single-player AI.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
