@@ -1,3 +1,5 @@
+import type { CloudPlayerStats, MatchResult } from '../shared/authTypes';
+
 export interface PlayerStats {
   xp: number;
   level: number;
@@ -5,6 +7,9 @@ export interface PlayerStats {
   streak: number;
   totalCaptures: number;
   totalMoves: number;
+  wins: number;
+  losses: number;
+  draws: number;
   lastAward: string | null;
 }
 
@@ -16,16 +21,23 @@ const RANKS = [
   { level: 5, title: 'Vrhovni Arhimag', minXp: 1600, nextXp: 999999 },
 ];
 
-class ProgressionService {
-  private stats: PlayerStats = {
+function createEmptyStats(): PlayerStats {
+  return {
     xp: 0,
     level: 1,
     title: 'Šegrt Sanctuma',
     streak: 0,
     totalCaptures: 0,
     totalMoves: 0,
+    wins: 0,
+    losses: 0,
+    draws: 0,
     lastAward: null,
   };
+}
+
+class ProgressionService {
+  private stats: PlayerStats = createEmptyStats();
 
   private listeners: ((stats: PlayerStats) => void)[] = [];
 
@@ -37,7 +49,7 @@ class ProgressionService {
     try {
       const data = localStorage.getItem('wizard_player_stats');
       if (data) {
-        this.stats = { ...this.stats, ...JSON.parse(data), lastAward: null };
+        this.stats = { ...createEmptyStats(), ...JSON.parse(data), lastAward: null };
         this.recalculateLevel();
       }
     } catch {
@@ -71,6 +83,20 @@ class ProgressionService {
 
   public getStats(): PlayerStats {
     return { ...this.stats };
+  }
+
+  public getCloudStats(): CloudPlayerStats {
+    return {
+      xp: this.stats.xp,
+      level: this.stats.level,
+      title: this.stats.title,
+      streak: this.stats.streak,
+      totalCaptures: this.stats.totalCaptures,
+      totalMoves: this.stats.totalMoves,
+      wins: this.stats.wins,
+      losses: this.stats.losses,
+      draws: this.stats.draws,
+    };
   }
 
   public getLevelProgress(): { current: number; max: number; percent: number } {
@@ -146,7 +172,32 @@ class ProgressionService {
     this.recalculateLevel();
     this.save();
   }
+
+  public recordMatchOutcome(result: MatchResult) {
+    if (result === 'win') {
+      this.stats.wins += 1;
+    } else if (result === 'loss') {
+      this.stats.losses += 1;
+    } else {
+      this.stats.draws += 1;
+    }
+    this.save();
+  }
+
+  public replaceFromCloud(cloud: CloudPlayerStats) {
+    this.stats = {
+      ...createEmptyStats(),
+      ...cloud,
+      lastAward: null,
+    };
+    this.recalculateLevel();
+    this.save();
+  }
+
+  public resetLocal() {
+    this.stats = createEmptyStats();
+    this.save();
+  }
 }
 
 export const progressionService = new ProgressionService();
-

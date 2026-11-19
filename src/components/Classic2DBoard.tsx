@@ -11,6 +11,7 @@ export interface PromotionRequest {
 
 interface Props {
   isOpen: boolean;
+  isOnlineMode?: boolean;
   onClose: () => void;
   onUndoMove: () => void;
   onRequestPromotion: (req: PromotionRequest) => void;
@@ -42,6 +43,7 @@ type DrawReason = 'stalemate' | 'fifty-move' | 'repetition' | null;
 
 export const Classic2DBoard: React.FC<Props> = ({
   isOpen,
+  isOnlineMode = false,
   onClose,
   onUndoMove,
   onRequestPromotion,
@@ -108,11 +110,13 @@ export const Classic2DBoard: React.FC<Props> = ({
     window.addEventListener('wizardchess:move', handleSync);
     window.addEventListener('wizardchess:reset', handleSync);
     window.addEventListener('wizardchess:undo', handleSync);
+    window.addEventListener('wizardchess:online-sync', handleSync);
 
     return () => {
       window.removeEventListener('wizardchess:move', handleSync);
       window.removeEventListener('wizardchess:reset', handleSync);
       window.removeEventListener('wizardchess:undo', handleSync);
+      window.removeEventListener('wizardchess:online-sync', handleSync);
     };
   }, [isOpen, syncBoardFromEngine]);
 
@@ -243,31 +247,35 @@ export const Classic2DBoard: React.FC<Props> = ({
             {isDraw && <span className="chess-2d-alert-draw">{drawLabel}</span>}
           </div>
           <div className="chess-2d-header-actions">
-            <button
-              type="button"
-              className="chess-2d-btn"
-              onClick={handleNewGame}
-              title="Započni novu partiju"
-            >
-              🔄 Nova
-            </button>
-            <button
-              type="button"
-              className="chess-2d-btn"
-              onClick={handleSwitchSide}
-              title="Promeni stranu (Beli / Crni)"
-            >
-              ⮂ {playerColor === 'w' ? 'Crni' : 'Beli'}
-            </button>
-            <button
-              type="button"
-              className="chess-2d-btn"
-              onClick={handleTriggerAI}
-              disabled={gameOver}
-              title="Neka AI odigra potez"
-            >
-              ⚡ AI
-            </button>
+            {!isOnlineMode && (
+              <>
+                <button
+                  type="button"
+                  className="chess-2d-btn"
+                  onClick={handleNewGame}
+                  title="Započni novu partiju"
+                >
+                  🔄 Nova
+                </button>
+                <button
+                  type="button"
+                  className="chess-2d-btn"
+                  onClick={handleSwitchSide}
+                  title="Promeni stranu (Beli / Crni)"
+                >
+                  ⮂ {playerColor === 'w' ? 'Crni' : 'Beli'}
+                </button>
+                <button
+                  type="button"
+                  className="chess-2d-btn"
+                  onClick={handleTriggerAI}
+                  disabled={gameOver}
+                  title="Neka AI odigra potez"
+                >
+                  ⚡ AI
+                </button>
+              </>
+            )}
             <button
               type="button"
               className="chess-2d-btn"
@@ -276,14 +284,16 @@ export const Classic2DBoard: React.FC<Props> = ({
             >
               ⮀ Okreni
             </button>
-            <button
-              type="button"
-              className="chess-2d-btn"
-              onClick={onUndoMove}
-              title="Vrati prethodni potez (U)"
-            >
-              ⏳ Vrati
-            </button>
+            {!isOnlineMode && (
+              <button
+                type="button"
+                className="chess-2d-btn"
+                onClick={onUndoMove}
+                title="Vrati prethodni potez (U)"
+              >
+                ⏳ Vrati
+              </button>
+            )}
             <button
               type="button"
               className="chess-2d-btn chess-2d-btn-close"

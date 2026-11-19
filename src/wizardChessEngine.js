@@ -2720,7 +2720,228 @@ export function initWizardChess() {
       return true;
     }
 
-    function resetChessBoard(orientCamera = true) {
+    function applyOnlineHologram(roomState, assignedColor) {
+      const enemyColor = assignedColor === 'w' ? 'b' : 'w';
+      const enemyAvatar = roomState?.players?.[enemyColor]?.avatar || 'mentor';
+      setSceneTheme(enemyAvatar);
+      opponentHologram.setPlayerSide(assignedColor, true);
+      opponentHologram.setModeVisible(!is2DModeActive && !academyMode);
+      opponentHologram.setThinking(false);
+    }
+
+    function showOnlineOutcomeBanner(outcome) {
+      const overlay = document.getElementById('checkmate-overlay');
+      const crownEl = document.getElementById('checkmate-crown');
+      const titleEl = document.getElementById('checkmate-title');
+      const subEl = document.getElementById('checkmate-subtitle');
+      const replayBtn = document.getElementById('btn-checkmate-replay');
+      const newGameBtn = document.getElementById('btn-checkmate-newgame');
+
+      const winner = outcome?.winner || null;
+      const winnerName = winner === 'w' ? 'Beli' : 'Crni';
+      let title = 'Kraj partije';
+      let subtitle = 'Partija je završena';
+      let crown = winner === 'w' ? '♔' : winner === 'b' ? '♚' : '⚖';
+
+      if (outcome?.reason === 'resign') {
+        title = 'Predaja';
+        subtitle = `${winnerName} pobeđuje • Protivnik je predao`;
+      } else if (outcome?.reason === 'timeout') {
+        title = 'Isteklo vreme';
+        subtitle = `${winnerName} pobeđuje • Vreme je isteklo`;
+      } else if (outcome?.reason === 'draw_agreed') {
+        title = 'Dogovoreni remi';
+        subtitle = 'Igrači su se saglasili za remi';
+        crown = '⚖';
+      } else if (outcome?.reason === 'stalemate') {
+        title = 'Pat — Remi';
+        subtitle = 'Nema legalnih poteza • Partija je nerešena';
+        crown = '⚖';
+      } else if (outcome?.reason === 'repetition') {
+        title = 'Remi';
+        subtitle = 'Trostruko ponavljanje pozicije';
+        crown = '⚖';
+      } else if (outcome?.reason === 'fifty-move') {
+        title = 'Remi';
+        subtitle = 'Pravilo 50 poteza bez napredovanja';
+        crown = '⚖';
+      }
+
+      if (crownEl) crownEl.textContent = crown;
+      if (titleEl) titleEl.textContent = title;
+      if (subEl) subEl.textContent = subtitle;
+      if (replayBtn) replayBtn.style.display = outcome?.reason === 'checkmate' ? 'inline-flex' : 'none';
+      if (newGameBtn) newGameBtn.textContent = gameMode === 'online' ? 'Traži revanš' : 'Nova partija';
+      if (overlay) overlay.classList.add('visible');
+      checkmateState.bannerVisible = true;
+    }
+
+    function endOnlineMatch(outcome, options = {}) {
+      if (gameMode !== 'online') return false;
+      gameOver = true;
+      const reason = outcome?.reason || null;
+      const winner = outcome?.winner || null;
+
+      if (reason === 'stalemate' || reason === 'repetition' || reason === 'fifty-move') {
+        drawReason = reason;
+      } else if (reason === 'draw_agreed') {
+        drawReason = 'draw_agreed';
+      }
+
+      if (reason === 'checkmate') {
+        const defeated = winner === 'w' ? 'b' : 'w';
+        if (!options.skipKingFall && !is2DModeActive && !checkmateState.active) {
+          triggerCheckmateSequence(defeated, winner);
+        } else {
+          showCheckmateBanner(winner, defeated);
+        }
+      } else {
+        showOnlineOutcomeBanner(outcome);
+      }
+
+      opponentHologram.setThinking(false);
+      if (winner) {
+        opponentHologram.triggerReaction(winner === playerColor ? 'defeat' : 'victory');
+      } else {
+        opponentHologram.triggerReaction('draw');
+      }
+      updateTurnUI();
+      return true;
+    }
+
+    function syncOnlineSnapshot(roomState, assignedColor, options = {}) {
+      if (!roomState || !roomState.chess) return false;
+      if (academyMode) {
+        academySavedState = null;
+        academyMode = false;
+      }
+      if (aiTimer) {
+        clearTimeout(aiTimer);
+        aiTimer = null;
+      }
+      activeMoveTweens.length = 0;
+      clearCheckmateSequence();
+      for (const d of shatterDebris) {
+        if (d.mesh) scene.remove(d.mesh);
+      }
+      shatterDebris.length = 0;
+      impactFlashLight.intensity = 0;
+      impactFlashLight.visible = false;
+      if (activeDuelSavedCam) {
+        camera.position.copy(activeDuelSavedCam.pos);
+        orbitControls.target.copy(activeDuelSavedCam.target);
+        activeDuelSavedCam = null;
+      }
+      orbitControls.enabled = true;
+      orbitControls.update();
+
+      clearAllPieces();
+      clearSquareHighlights();
+      selectedSquare = null;
+      validMoves = [];
+      isAnimatingMove = false;
+
+      gameMode = 'online';
+      aiAutoPlay = false;
+      playerColor = assignedColor === 'b' ? 'b' : 'w';
+
+      const chess = roomState.chess;
+      currentTurn = chess.currentTurn === 'b' ? 'b' : 'w';
+      gameOver = Boolean(chess.gameOver || roomState.status === 'ended');
+      drawReason = chess.drawReason || null;
+      enPassantTarget = chess.enPassantTarget ? { ...chess.enPassantTarget } : null;
+      halfMoveClock = typeof chess.halfMoveClock === 'number' ? chess.halfMoveClock : 0;
+      positionHistory = Array.isArray(chess.positionHistory) ? chess.positionHistory.slice() : [];
+
+      let whiteCount = 0;
+      let blackCount = 0;
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const cell = chess.board?.[r]?.[c];
+          if (cell) {
+            const inst = instantiatePiece(cell.type, cell.color, r, c);
+            inst.hasMoved = Boolean(cell.hasMoved);
+            boardState[r][c] = inst;
+            if (cell.color === 'w') whiteCount += 1;
+            else blackCount += 1;
+          }
+        }
+      }
+      capturedByWhite = Math.max(0, 16 - blackCount);
+      capturedByBlack = Math.max(0, 16 - whiteCount);
+
+      const mvCount = Math.max(0, Number(chess.moveCount) || 0);
+      moveHistory = Array.from({ length: mvCount }, (_, idx) => ({
+        snapshot: null,
+        move: idx === mvCount - 1 && chess.lastMove ? chess.lastMove : null
+      }));
+
+      if (options.orientCamera !== false) {
+        const viewSide = playerColor === 'b' ? 'b' : 'w';
+        playerCamSide = viewSide;
+        primaryCameraView = 'player';
+        setActiveCamButton('btn-camera-view');
+        notifyPrimaryCameraView();
+        setCameraForSide(viewSide, Boolean(options.immediateCamera));
+      }
+
+      applyOnlineHologram(roomState, playerColor);
+      renderer.shadowMap.needsUpdate = true;
+      updateTurnUI();
+
+      if (roomState.status === 'ended' && roomState.outcome?.reason) {
+        endOnlineMatch(roomState.outcome, { skipKingFall: Boolean(options.skipKingFall) });
+      }
+
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('wizardchess:online-sync'));
+      }
+      return true;
+    }
+
+    function enterOnlineMode(roomState, assignedColor) {
+      const ok = syncOnlineSnapshot(roomState, assignedColor, {
+        orientCamera: true,
+        immediateCamera: false
+      });
+      if (ok) {
+        opponentHologram.triggerReaction('idle');
+      }
+      return ok;
+    }
+
+    function applyOnlineMove(move, roomState, assignedColor) {
+      if (gameMode !== 'online' || !move) return false;
+      completeCurrentMoveImmediately();
+      const movingPiece = boardState[move.fromR]?.[move.fromC];
+      if (!movingPiece || movingPiece.color !== currentTurn) {
+        return syncOnlineSnapshot(roomState, assignedColor || playerColor, {
+          orientCamera: false
+        });
+      }
+      const ok = executeChessMove(move.fromR, move.fromC, move.toR, move.toC, {
+        promotion: move.promotion,
+        fromServer: true,
+        instant: is2DModeActive
+      });
+      if (!ok && roomState) {
+        return syncOnlineSnapshot(roomState, assignedColor || playerColor, {
+          orientCamera: false
+        });
+      }
+      return ok;
+    }
+
+    function exitOnlineMode() {
+      gameMode = 'single';
+      aiAutoPlay = true;
+      playerColor = 'w';
+      resetChessBoard(true, { force: true });
+      return true;
+    }
+
+    function resetChessBoard(orientCamera = true, options = {}) {
+      if (gameMode === 'online' && !options.force) return false;
       if (aiTimer) {
         clearTimeout(aiTimer);
         aiTimer = null;
@@ -3209,6 +3430,27 @@ export function initWizardChess() {
       const isPromotion = piece.type === 'pawn' && (toR === 0 || toR === 7);
       const promoType =
         isPromotion && PROMOTION_TYPES.includes(options.promotion) ? options.promotion : 'queen';
+
+      if (!academyMode && gameMode === 'online' && !options.fromServer) {
+        if (piece.color !== playerColor) return false;
+        clearSquareHighlights();
+        selectedSquare = null;
+        validMoves = [];
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(
+            new CustomEvent('wizardchess:online-move-submit', {
+              detail: {
+                fromR,
+                fromC,
+                toR,
+                toC,
+                promotion: isPromotion ? promoType : undefined
+              }
+            })
+          );
+        }
+        return true;
+      }
       const isEnPassant = Boolean(matchedLegal.enPassant);
       const epCapturedR = isEnPassant ? matchedLegal.capturedR : -1;
       const epCapturedC = isEnPassant ? matchedLegal.capturedC : -1;
@@ -4221,7 +4463,7 @@ export function initWizardChess() {
     }
 
     function triggerAIMoveNow() {
-      if (isAnimatingMove || gameOver) return false;
+      if (gameMode === 'online' || isAnimatingMove || gameOver) return false;
       const chosen = chooseSmartAIMove(currentTurn);
       if (!chosen) return false;
       return executeChessMove(chosen.fromR, chosen.fromC, chosen.toR, chosen.toC);
@@ -4267,7 +4509,7 @@ export function initWizardChess() {
     }
 
     function undoPlayerMove() {
-      if (academyMode || isAnimatingMove) return false;
+      if (academyMode || gameMode === 'online' || isAnimatingMove) return false;
       if (aiTimer) {
         clearTimeout(aiTimer);
         aiTimer = null;
@@ -4438,6 +4680,10 @@ export function initWizardChess() {
       const winnerName = winnerColor === 'w' ? 'Beli' : 'Crni';
       const defeatedName = defeatedColor === 'w' ? 'beli' : 'crni';
 
+      const replayBtn = document.getElementById('btn-checkmate-replay');
+      const newGameBtn = document.getElementById('btn-checkmate-newgame');
+      if (replayBtn) replayBtn.style.display = 'inline-flex';
+      if (newGameBtn) newGameBtn.textContent = gameMode === 'online' ? 'Traži revanš' : 'Nova partija';
       if (crownEl) crownEl.textContent = winnerColor === 'w' ? '♔' : '♚';
       if (titleEl) titleEl.textContent = 'Šah-mat';
       if (subEl) {
@@ -4734,12 +4980,20 @@ export function initWizardChess() {
       } else if (!academyMode && drawReason === 'fifty-move') {
         gameOver = true;
         if (turnText) turnText.textContent = 'Remi — Pravilo 50 poteza';
+      } else if (!academyMode && drawReason === 'draw_agreed') {
+        gameOver = true;
+        if (turnText) turnText.textContent = 'Dogovoreni remi';
       } else {
         const turnLabel = currentTurn === 'w' ? 'Beli na potezu' : 'Crni na potezu';
         const aiColor = playerColor === 'w' ? 'b' : 'w';
         const isAiTurn = !academyMode && gameMode === 'single' && currentTurn === aiColor;
         if (turnText) {
-          if (inCheck) {
+          if (gameMode === 'online' && !academyMode) {
+            const isYourTurn = currentTurn === playerColor;
+            turnText.textContent = isYourTurn
+              ? (inCheck ? 'Tvoj potez (Šah!)' : 'Tvoj potez')
+              : (inCheck ? 'Protivnik na potezu (Šah!)' : 'Protivnik na potezu');
+          } else if (inCheck) {
             turnText.textContent = `${turnLabel} (Šah!)`;
           } else if (isAiTurn) {
             turnText.textContent = `${turnLabel} (AI)...`;
@@ -4750,15 +5004,19 @@ export function initWizardChess() {
       }
 
       if (modeBadge) {
-        modeBadge.textContent = academyMode
-          ? 'Akademija'
-          : `Igraš kao ${playerColor === 'w' ? 'beli' : 'crni'}`;
+        if (academyMode) {
+          modeBadge.textContent = 'Akademija';
+        } else if (gameMode === 'online') {
+          modeBadge.textContent = `Online Duel • ${playerColor === 'w' ? 'Beli' : 'Crni'}`;
+        } else {
+          modeBadge.textContent = `Igraš kao ${playerColor === 'w' ? 'beli' : 'crni'}`;
+        }
       }
       if (btnAiMove) {
-        btnAiMove.style.display = 'inline-flex';
+        btnAiMove.style.display = gameMode === 'online' ? 'none' : 'inline-flex';
       }
       if (btnSideToggle) {
-        btnSideToggle.style.display = 'inline-flex';
+        btnSideToggle.style.display = gameMode === 'online' ? 'none' : 'inline-flex';
         btnSideToggle.textContent = playerColor === 'w' ? '⮂ Igraj crnim' : '⮂ Igraj belim';
       }
 
@@ -4989,7 +5247,7 @@ export function initWizardChess() {
     document.getElementById('btn-hide-ui')?.addEventListener('click', () => toggleUI());
 
     function toggleSide() {
-      if (academyMode) return false;
+      if (academyMode || gameMode === 'online') return false;
       playerColor = playerColor === 'w' ? 'b' : 'w';
       resetChessBoard(true);
       return true;
@@ -5026,6 +5284,10 @@ export function initWizardChess() {
       triggerCheckmateSequence(defCol, winCol);
     });
     document.getElementById('btn-checkmate-newgame')?.addEventListener('click', () => {
+      if (gameMode === 'online') {
+        window.dispatchEvent(new CustomEvent('wizardchess:online-rematch-request'));
+        return;
+      }
       resetChessBoard(true);
     });
     document.getElementById('btn-checkmate-dismiss')?.addEventListener('click', () => {
@@ -5067,6 +5329,12 @@ export function initWizardChess() {
       setAcademyPosition,
       exitAcademy,
       undoPlayerMove,
+      enterOnlineMode,
+      syncOnlineSnapshot,
+      applyOnlineMove,
+      endOnlineMatch,
+      exitOnlineMode,
+      getGameMode: () => gameMode,
       getBoardState: () => {
         return boardState.map((row) =>
           row.map((cell) => (cell ? { type: cell.type, color: cell.color } : null))

@@ -301,4 +301,186 @@ test('Opponent hologram visualizes all three personas across from player and rea
   assert.ok(engine.includes('opponentHologram.update(dt, elapsedTotal)'));
 });
 
+test('Shared authoritative chess rules validate moves, en passant, castling, promotion, and checkmate', async () => {
+  const { createInitialChessState, applyChessMove, getLegalMovesForSquare } = await import('../src/shared/chessRules.ts');
+
+  let state = createInitialChessState();
+  assert.equal(state.currentTurn, 'w');
+  assert.equal(state.moveCount, 0);
+
+  // Fool's mate: 1. f3 e5 2. g4 Qh4#
+  let res = applyChessMove(state, 6, 5, 5, 5); // f2->f3
+  assert.equal(res.ok, true);
+  state = res.state;
+
+  res = applyChessMove(state, 1, 4, 3, 4); // e7->e5
+  assert.equal(res.ok, true);
+  state = res.state;
+
+  // Reject out-of-turn Black move while White's turn
+  const wrongTurn = applyChessMove(state, 0, 3, 4, 7);
+  assert.equal(wrongTurn.ok, false);
+
+  res = applyChessMove(state, 6, 6, 4, 6); // g2->g4
+  assert.equal(res.ok, true);
+  state = res.state;
+
+  res = applyChessMove(state, 0, 3, 4, 7); // Qd8->h4#
+  assert.equal(res.ok, true);
+  state = res.state;
+
+  assert.equal(state.inCheck, true);
+  assert.equal(state.isCheckmate, true);
+  assert.equal(state.gameOver, true);
+
+  // En passant + pawn promotion check on fresh board
+  state = createInitialChessState();
+  state = applyChessMove(state, 6, 4, 4, 4).state; // e2->e4
+  state = applyChessMove(state, 1, 0, 3, 0).state; // a7->a5
+  state = applyChessMove(state, 4, 4, 3, 4).state; // e4->e5
+  state = applyChessMove(state, 1, 3, 3, 3).state; // d7->d5 (double push)
+  const epMoves = getLegalMovesForSquare(state, 3, 4);
+  assert.ok(epMoves.some((m) => m.r === 2 && m.c === 3 && m.enPassant), 'En passant target must be generated');
+  res = applyChessMove(state, 3, 4, 2, 3);
+  assert.equal(res.ok, true);
+  assert.equal(res.move.enPassant, true);
+  assert.equal(res.state.board[3][3], null, 'En passant must remove captured pawn');
+});
+
+test('Online 2-player duel mode wires WebSocket server, modal, match bar, and engine sync', () => {
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf-8');
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+
+  assert.ok(serverSrc.includes("url.pathname === '/ws'"), 'Server must upgrade /ws WebSocket connections');
+  assert.ok(serverSrc.includes("msg.type === 'room:create'"));
+  assert.ok(serverSrc.includes("msg.type === 'room:join'"));
+  assert.ok(serverSrc.includes("msg.type === 'move:submit'"));
+  assert.ok(serverSrc.includes("msg.type === 'match:resign'"));
+  assert.ok(serverSrc.includes("msg.type === 'match:draw_offer'"));
+  assert.ok(serverSrc.includes("msg.type === 'match:rematch'"));
+
+  assert.ok(appTsx.includes('id="btn-online-duel"'));
+  assert.ok(appTsx.includes('<OnlineDuelModal'));
+  assert.ok(appTsx.includes('<OnlineMatchBar'));
+  assert.ok(appTsx.includes("wizardchess:online-move-submit"));
+
+  assert.ok(engine.includes('function enterOnlineMode('));
+  assert.ok(engine.includes('function applyOnlineMove('));
+  assert.ok(engine.includes('function endOnlineMatch('));
+  assert.ok(engine.includes('function exitOnlineMode('));
+});
+
+test('Local SQLite authStore registers users, merges guest progression, manages sessions, and records match history', async () => {
+  const { createAuthStore } = await import('../src/server/authStore.ts');
+  const store = createAuthStore(':memory:');
+
+  try {
+    // Validation guards
+    const badPass = store.registerUser({ username: 'milan', password: '123' });
+    assert.equal(badPass.ok, false);
+
+    // Registration merges guest XP & Academy progress
+    const reg = store.registerUser({
+      username: 'Carobnjak_99',
+      password: 'tajnalozinka',
+      displayName: 'Veliki Milan',
+      guestStats: { xp: 180, totalMoves: 12, totalCaptures: 3, streak: 2 },
+      guestAcademy: { puzzles: ['puzzle-1'], openings: ['op-1'] },
+    });
+    assert.equal(reg.ok, true);
+    assert.equal(reg.data.user.username, 'carobnjak_99');
+    assert.equal(reg.data.user.displayName, 'Veliki Milan');
+    assert.equal(reg.data.user.stats.level, 2);
+    assert.equal(reg.data.user.stats.title, 'Kameni Adept');
+    assert.deepEqual(reg.data.user.academyProgress.puzzles, ['puzzle-1']);
+
+    // Duplicate username rejected
+    const dup = store.registerUser({ username: 'carobnjak_99', password: 'tajnalozinka2' });
+    assert.equal(dup.ok, false);
+    assert.equal(dup.status, 409);
+
+    // Wrong password rejected
+    const badLogin = store.loginUser({ username: 'carobnjak_99', password: 'pogresna' });
+    assert.equal(badLogin.ok, false);
+    assert.equal(badLogin.status, 401);
+
+    // Session lookup works
+    const sess = store.getSessionUser(reg.data.token);
+    assert.ok(sess);
+    assert.equal(sess.user.id, reg.data.user.id);
+
+    // Display name update works
+    const renamed = store.updateDisplayName(reg.data.user.id, 'Arhimag Milan');
+    assert.equal(renamed.ok, true);
+    assert.equal(renamed.user.displayName, 'Arhimag Milan');
+
+    // Recording online and single-player matches updates W/D/L and history
+    store.recordMatch(reg.data.user.id, {
+      mode: 'online',
+      playerColor: 'w',
+      opponentName: 'Luka',
+      result: 'win',
+      reason: 'checkmate',
+      moveCount: 24,
+    });
+    const afterSecond = store.recordMatch(reg.data.user.id, {
+      mode: 'single',
+      playerColor: 'b',
+      opponentName: 'Alistair (AI)',
+      result: 'draw',
+      reason: 'stalemate',
+      moveCount: 52,
+    });
+    assert.equal(afterSecond.user.stats.wins, 1);
+    assert.equal(afterSecond.user.stats.draws, 1);
+    assert.equal(afterSecond.user.stats.losses, 0);
+    assert.equal(afterSecond.matches.length, 2);
+    assert.equal(afterSecond.matches[0].mode, 'single');
+    assert.equal(afterSecond.matches[1].mode, 'online');
+
+    // Login merges newer guest progress monotonically
+    const loginRes = store.loginUser({
+      username: 'carobnjak_99',
+      password: 'tajnalozinka',
+      guestStats: { xp: 450 },
+      guestAcademy: { strategy: ['strat-2'] },
+    });
+    assert.equal(loginRes.ok, true);
+    assert.equal(loginRes.data.user.stats.xp, 450);
+    assert.equal(loginRes.data.user.stats.level, 3);
+    assert.deepEqual(loginRes.data.user.academyProgress.strategy, ['strat-2']);
+    assert.deepEqual(loginRes.data.user.academyProgress.puzzles, ['puzzle-1']);
+
+    // Logout revokes token
+    store.logoutSession(reg.data.token);
+    assert.equal(store.getSessionUser(reg.data.token), null);
+  } finally {
+    store.close();
+  }
+});
+
+test('Local auth endpoints and React AccountModal UI are wired without Firebase', () => {
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf-8');
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const pkgJson = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8');
+
+  for (const endpoint of [
+    '/api/auth/register',
+    '/api/auth/login',
+    '/api/auth/logout',
+    '/api/auth/me',
+    '/api/profile/display-name',
+    '/api/profile/progress',
+    '/api/profile/matches',
+  ]) {
+    assert.ok(serverSrc.includes(endpoint), `Missing auth endpoint ${endpoint} in server.ts`);
+  }
+  assert.ok(serverSrc.includes('recordCompletedOnlineRoom'), 'Server must record completed online matches');
+
+  assert.ok(appTsx.includes('id="btn-account"'), 'App.tsx must include #btn-account button');
+  assert.ok(appTsx.includes('<AccountModal'), 'App.tsx must render AccountModal');
+  assert.ok(appTsx.includes('authService.recordSinglePlayerMatch'), 'App.tsx must record finished AI matches');
+  assert.ok(!pkgJson.includes('firebase'), 'Firebase dependency must not be added');
+});
 

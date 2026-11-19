@@ -6,10 +6,16 @@ import { PlayerLevelBar } from './components/PlayerLevelBar';
 import { Academy } from './components/Academy';
 import { Classic2DBoard, type PromotionRequest } from './components/Classic2DBoard';
 import { Chess2DPiece } from './components/Chess2DPiece';
+import { OnlineDuelModal } from './components/OnlineDuelModal';
+import { OnlineMatchBar } from './components/OnlineMatchBar';
+import { AccountModal } from './components/AccountModal';
 import { PERSONAS, PersonaId, geminiService, MoveEventDetail } from './services/geminiService';
 import { soundService } from './services/soundService';
 import { progressionService } from './services/progressionService';
+import { authService, type AuthSnapshot } from './services/authService';
+import { multiplayerService, type OnlineSessionSnapshot } from './services/multiplayerService';
 import type { SceneThemeId } from './services/sceneThemes';
+import type { OnlinePersonaId, PreferredSide, TimeControlId } from './shared/multiplayerTypes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 
 type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'srpski-kraljevski';
@@ -91,6 +97,18 @@ export default function App() {
   const [academyError, setAcademyError] = useState<string | null>(null);
   const [is2DMode, setIs2DMode] = useState(false);
   const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
+  const [onlineSession, setOnlineSession] = useState<OnlineSessionSnapshot>(() =>
+    multiplayerService.getSnapshot()
+  );
+  const [onlineModalOpen, setOnlineModalOpen] = useState(false);
+  const [onlineModalTab, setOnlineModalTab] = useState<'create' | 'join'>('create');
+  const [onlineJoinCode, setOnlineJoinCode] = useState('');
+  const [authSnap, setAuthSnap] = useState<AuthSnapshot>(() => authService.getSnapshot());
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const isOnlineMode = Boolean(onlineSession.roomId && onlineSession.roomState);
+  const isOnlineModeRef = useRef(isOnlineMode);
+  isOnlineModeRef.current = isOnlineMode;
+  const lastOnlineOpponentAvatarRef = useRef<string | null>(null);
 
   const applySceneTheme = (themeId: SceneThemeId) => {
     const win = window as Window & {
@@ -128,6 +146,153 @@ export default function App() {
     }
     applySceneTheme(selectedPersonaRef.current);
   }, []);
+
+  useEffect(() => {
+    void authService.init();
+    const unsubAuth = authService.subscribe(setAuthSnap);
+    const unsubscribe = multiplayerService.subscribe((snap) => {
+      setOnlineSession(snap);
+    });
+
+    multiplayerService.setEventHandlers({
+      onRoomEntered: (yourColor, state, isRematch) => {
+        setAcademyVisible(false);
+        setPendingPromotion(null);
+        const win = window as Window & {
+          wizardChess?: {
+            enterOnlineMode?: (roomState: typeof state, assignedColor: typeof yourColor) => boolean;
+          };
+        };
+        win.wizardChess?.enterOnlineMode?.(state, yourColor);
+
+        const oppCol = yourColor === 'w' ? 'b' : 'w';
+        const oppAvatar = state.players[oppCol]?.avatar;
+        if (oppAvatar) {
+          lastOnlineOpponentAvatarRef.current = oppAvatar;
+          setSelectedPersona(oppAvatar);
+          selectedPersonaRef.current = oppAvatar;
+        } else {
+          lastOnlineOpponentAvatarRef.current = null;
+        }
+
+        if (state.status === 'waiting') {
+          setAiMessage('Soba je otvorena! Pošalji kod ili pozivni link prijatelju.');
+        } else if (isRematch) {
+          setOnlineModalOpen(false);
+          setAiMessage(
+            state.chess.currentTurn === yourColor
+              ? 'Revanš je počeo! Zamenili ste boje — tvoj potez.'
+              : 'Revanš je počeo! Zamenili ste boje — protivnik otvara partiju.'
+          );
+        } else {
+          setOnlineModalOpen(false);
+          setAiMessage(
+            state.chess.currentTurn === yourColor
+              ? 'Online duel je počeo! Igraš kao ' + (yourColor === 'w' ? 'beli' : 'crni') + ' — tvoj potez.'
+              : 'Online duel je počeo! Igraš kao ' + (yourColor === 'w' ? 'beli' : 'crni') + ' — čekamo prvi potez protivnika.'
+          );
+        }
+      },
+      onMoveApplied: (move, state) => {
+        const snap = multiplayerService.getSnapshot();
+        const win = window as Window & {
+          wizardChess?: {
+            applyOnlineMove?: (
+              mv: typeof move,
+              roomState: typeof state,
+              assignedColor: typeof snap.yourColor
+            ) => boolean;
+          };
+        };
+        win.wizardChess?.applyOnlineMove?.(move, state, snap.yourColor);
+      },
+      onMatchEnded: (outcome) => {
+        const win = window as Window & {
+          wizardChess?: {
+            endOnlineMatch?: (endOutcome: typeof outcome) => boolean;
+          };
+        };
+        win.wizardChess?.endOnlineMatch?.(outcome);
+        if (outcome.reason === 'resign' || outcome.reason === 'timeout') {
+          soundService.playCheck();
+        }
+      },
+    });
+
+    const handleOnlineMoveSubmit = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          fromR: number;
+          fromC: number;
+          toR: number;
+          toC: number;
+          promotion?: PromotionPieceType;
+        }>
+      ).detail;
+      if (!detail) return;
+      multiplayerService.submitMove(
+        detail.fromR,
+        detail.fromC,
+        detail.toR,
+        detail.toC,
+        detail.promotion
+      );
+    };
+
+    const handleOnlineRematchRequest = () => {
+      multiplayerService.requestRematch();
+    };
+
+    window.addEventListener('wizardchess:online-move-submit', handleOnlineMoveSubmit);
+    window.addEventListener('wizardchess:online-rematch-request', handleOnlineRematchRequest);
+
+    const inviteCode = multiplayerService.getInviteCodeFromUrl();
+    const stored = multiplayerService.getStoredSession();
+    if (inviteCode && (!stored || stored.roomId !== inviteCode)) {
+      setOnlineJoinCode(inviteCode);
+      setOnlineModalTab('join');
+      setOnlineModalOpen(true);
+    } else if (stored) {
+      multiplayerService.reconnectRoom(stored.roomId, stored.playerToken);
+    }
+
+    return () => {
+      unsubAuth();
+      unsubscribe();
+      window.removeEventListener('wizardchess:online-move-submit', handleOnlineMoveSubmit);
+      window.removeEventListener('wizardchess:online-rematch-request', handleOnlineRematchRequest);
+    };
+  }, []);
+
+  useEffect(() => {
+    const room = onlineSession.roomState;
+    const yourColor = onlineSession.yourColor;
+    if (!room || !yourColor) {
+      lastOnlineOpponentAvatarRef.current = null;
+      return;
+    }
+
+    if (room.status === 'playing' && onlineModalOpen) {
+      setOnlineModalOpen(false);
+    }
+
+    const oppColor = yourColor === 'w' ? 'b' : 'w';
+    const oppAvatar = room.players[oppColor]?.avatar || null;
+    if (oppAvatar && oppAvatar !== lastOnlineOpponentAvatarRef.current) {
+      lastOnlineOpponentAvatarRef.current = oppAvatar;
+      setSelectedPersona(oppAvatar);
+      selectedPersonaRef.current = oppAvatar;
+      applySceneTheme(oppAvatar);
+      if (room.chess.moveCount === 0) {
+        const oppName = room.players[oppColor]?.displayName || PERSONAS[oppAvatar].name;
+        setAiMessage(
+          room.chess.currentTurn === yourColor
+            ? `Protivnik (${oppName}) se povezao! Tvoj je potez.`
+            : `Protivnik (${oppName}) se povezao! Čekamo njegov prvi potez.`
+        );
+      }
+    }
+  }, [onlineSession.roomState, onlineSession.yourColor, onlineModalOpen]);
 
   useEffect(() => {
     const handleCameraViewChange = (event: Event) => {
@@ -237,6 +402,7 @@ export default function App() {
   };
 
   const handleUndoMove = async () => {
+    if (isOnlineModeRef.current) return;
     setPendingPromotion(null);
     const win = window as unknown as { wizardChess?: { undoPlayerMove?: () => boolean } };
     const success = win.wizardChess?.undoPlayerMove?.();
@@ -294,6 +460,19 @@ export default function App() {
         progressionService.recordOpponentMove(Boolean(detail.move?.capture), isCheckmate);
       }
 
+      if (detail.gameOver && !isOnlineModeRef.current) {
+        const matchResult = isCheckmate ? (isPlayerMove ? 'win' : 'loss') : 'draw';
+        const aiPersona = PERSONAS[selectedPersonaRef.current];
+        const reason = isCheckmate ? 'checkmate' : detail.drawReason || 'stalemate';
+        void authService.recordSinglePlayerMatch({
+          playerColor: detail.playerColor,
+          opponentName: `${aiPersona.name} (AI)`,
+          result: matchResult,
+          reason,
+          moveCount: detail.moveCount,
+        });
+      }
+
       const reqId = ++aiRequestSeqRef.current;
       setIsLoadingAI(true);
       try {
@@ -337,6 +516,7 @@ export default function App() {
   }, []);
 
   const handleOpenAcademy = () => {
+    if (isOnlineModeRef.current) return;
     setIs2DMode(false);
     setPendingPromotion(null);
     setAcademyView('home');
@@ -434,22 +614,26 @@ export default function App() {
       if (e.key === 'Escape') {
         if (pendingPromotion) {
           setPendingPromotion(null);
+        } else if (accountModalOpen) {
+          setAccountModalOpen(false);
+        } else if (onlineModalOpen) {
+          setOnlineModalOpen(false);
         } else if (is2DMode) {
           setIs2DMode(false);
         } else {
           setMobileSheetOpen(false);
         }
       } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
-        if (!academyVisible && !pendingPromotion && !isTypingTarget(e.target)) {
+        if (!academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isOnlineModeRef.current && !isTypingTarget(e.target)) {
           e.preventDefault();
           handleUndoMove();
         }
       } else if (e.key === 'u' || e.key === 'U') {
-        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !isTypingTarget(e.target)) {
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isOnlineModeRef.current && !isTypingTarget(e.target)) {
           handleUndoMove();
         }
       } else if (e.key === '2') {
-        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !isTypingTarget(e.target)) {
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isTypingTarget(e.target)) {
           setIs2DMode((prev) => !prev);
         }
       }
@@ -465,7 +649,36 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleResize);
     };
-  }, [academyVisible, is2DMode, pendingPromotion]);
+  }, [academyVisible, is2DMode, pendingPromotion, onlineModalOpen, accountModalOpen]);
+
+  const handleOpenOnlineModal = (tab: 'create' | 'join' = 'create') => {
+    multiplayerService.clearError();
+    setOnlineModalTab(tab);
+    setOnlineModalOpen(true);
+    setMobileSheetOpen(false);
+  };
+
+  const handleCreateOnlineRoom = (
+    timeControlId: TimeControlId,
+    preferredSide: PreferredSide,
+    avatar: OnlinePersonaId
+  ) => {
+    multiplayerService.createRoom(timeControlId, preferredSide, avatar);
+  };
+
+  const handleJoinOnlineRoom = (roomId: string, avatar: OnlinePersonaId) => {
+    multiplayerService.joinRoom(roomId, avatar);
+  };
+
+  const handleLeaveOnlineRoom = () => {
+    multiplayerService.leaveRoom();
+    setOnlineModalOpen(false);
+    const win = window as Window & {
+      wizardChess?: { exitOnlineMode?: () => boolean };
+    };
+    win.wizardChess?.exitOnlineMode?.();
+    applySceneTheme(selectedPersonaRef.current);
+  };
 
   const handleRestoreUI = () => {
     const win = window as unknown as { wizardChess?: { toggleUI?: (force?: boolean) => void } };
@@ -555,13 +768,38 @@ export default function App() {
           {/* Gamified RPG Player Level Bar */}
           <PlayerLevelBar />
 
+          <button
+            type="button"
+            id="btn-account"
+            className={`hud-btn account-hud-btn ${authSnap.user ? 'logged-in' : ''}`}
+            onClick={() => setAccountModalOpen(true)}
+            title="Profil igrača, prijava i istorija partija"
+          >
+            {authSnap.user ? `👤 ${authSnap.user.displayName}` : '👤 Prijava / Gost'}
+          </button>
+
           {/* Desktop AI Persona Selector */}
-          <PersonaSelector
-            selectedPersona={selectedPersona}
-            onSelectPersona={handleSelectPersona}
-          />
+          {!isOnlineMode && (
+            <PersonaSelector
+              selectedPersona={selectedPersona}
+              onSelectPersona={handleSelectPersona}
+            />
+          )}
         </div>
 
+        {isOnlineMode && (
+          <div className="hud-group" id="hud-online-group">
+            <OnlineMatchBar
+              session={onlineSession}
+              onResign={() => multiplayerService.resign()}
+              onOfferDraw={() => multiplayerService.offerDraw()}
+              onRespondDraw={(accept) => multiplayerService.respondDraw(accept)}
+              onRematch={() => multiplayerService.requestRematch()}
+              onLeave={handleLeaveOnlineRoom}
+              onShowInviteModal={() => setOnlineModalOpen(true)}
+            />
+          </div>
+        )}
       </div>
 
       {/* ── Bottom Dock: 3 Capsules (Variant B) ── */}
@@ -603,16 +841,18 @@ export default function App() {
         </div>
 
         {/* Mobile persona picker (hidden on desktop) */}
-        <div className="mobile-only-persona-picker">
-          <div className="mobile-sheet-section-label">AI Mentor &amp; Ličnost</div>
-          <PersonaSelector
-            selectedPersona={selectedPersona}
-            onSelectPersona={(id) => {
-              handleSelectPersona(id);
-              setMobileSheetOpen(false);
-            }}
-          />
-        </div>
+        {!isOnlineMode && (
+          <div className="mobile-only-persona-picker">
+            <div className="mobile-sheet-section-label">AI Mentor &amp; Ličnost</div>
+            <PersonaSelector
+              selectedPersona={selectedPersona}
+              onSelectPersona={(id) => {
+                handleSelectPersona(id);
+                setMobileSheetOpen(false);
+              }}
+            />
+          </div>
+        )}
 
         {/* ── Capsule 1: Režimi ── */}
         <div className="dock-capsule dock-modes">
@@ -621,12 +861,22 @@ export default function App() {
             type="button"
             className="hud-btn academy-launch-button"
             id="btn-academy"
+            disabled={isOnlineMode}
             onClick={() => {
               handleOpenAcademy();
               setMobileSheetOpen(false);
             }}
           >
             ✦ Akademija
+          </button>
+          <button
+            type="button"
+            className={`hud-btn ${isOnlineMode ? 'active' : ''}`}
+            id="btn-online-duel"
+            title="Igraj online partiju protiv prijatelja"
+            onClick={() => handleOpenOnlineModal('create')}
+          >
+            ⚔ {isOnlineMode ? `Online (${onlineSession.roomId})` : 'Online'}
           </button>
           <button
             type="button"
@@ -643,11 +893,12 @@ export default function App() {
         </div>
 
         {/* ── Capsule 2: Partija (centar) ── */}
-        <div className="dock-capsule dock-game">
+        <div className={`dock-capsule dock-game ${isOnlineMode ? 'online-hidden' : ''}`}>
           <span className="dock-capsule-label">Partija</span>
           <button
             className="hud-btn"
             id="btn-undo-move"
+            disabled={isOnlineMode}
             title="Vrati prethodni potez (Prečica: U ili Ctrl+Z)"
             onClick={() => {
               handleUndoMove();
@@ -659,6 +910,7 @@ export default function App() {
           <button
             className="hud-btn"
             id="btn-ai-move"
+            disabled={isOnlineMode}
             title="Neka AI odigra sledeći potez"
             onClick={() => setMobileSheetOpen(false)}
           >
@@ -667,6 +919,7 @@ export default function App() {
           <button
             className="hud-btn"
             id="btn-reset"
+            disabled={isOnlineMode}
             title="Započni novu partiju"
             onClick={() => setMobileSheetOpen(false)}
           >
@@ -690,8 +943,9 @@ export default function App() {
           </button>
           <button
             type="button"
-            className="hud-btn"
+            className={`hud-btn ${isOnlineMode ? 'online-hidden' : ''}`}
             id="btn-ai-difficulty"
+            disabled={isOnlineMode}
             title="Promeni težinu protivnika"
             aria-label={`Promeni težinu AI protivnika. Trenutna težina: ${AI_DIFFICULTY_NAMES[aiDifficulty]}`}
             onClick={handleToggleAIDifficulty}
@@ -699,8 +953,9 @@ export default function App() {
             ⚔ {AI_DIFFICULTY_NAMES[aiDifficulty]}
           </button>
           <button
-            className="hud-btn"
+            className={`hud-btn ${isOnlineMode ? 'online-hidden' : ''}`}
             id="btn-side-toggle"
+            disabled={isOnlineMode}
             title="Igraj kao beli ili crni"
             onClick={() => setMobileSheetOpen(false)}
           >
@@ -793,9 +1048,28 @@ export default function App() {
 
       <Classic2DBoard
         isOpen={is2DMode}
+        isOnlineMode={isOnlineMode}
         onClose={() => setIs2DMode(false)}
         onUndoMove={handleUndoMove}
         onRequestPromotion={setPendingPromotion}
+      />
+
+      <OnlineDuelModal
+        isOpen={onlineModalOpen}
+        initialTab={onlineModalTab}
+        initialJoinCode={onlineJoinCode}
+        session={onlineSession}
+        onClose={() => setOnlineModalOpen(false)}
+        onCreateRoom={handleCreateOnlineRoom}
+        onJoinRoom={handleJoinOnlineRoom}
+        onCancelWaiting={handleLeaveOnlineRoom}
+        onClearError={() => multiplayerService.clearError()}
+      />
+
+      <AccountModal
+        isOpen={accountModalOpen}
+        auth={authSnap}
+        onClose={() => setAccountModalOpen(false)}
       />
 
       {pendingPromotion ? (

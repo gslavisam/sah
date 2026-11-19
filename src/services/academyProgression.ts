@@ -1,4 +1,5 @@
 import type { AcademyAreaId } from './academyCatalog';
+import type { AcademyProgressMap } from '../shared/authTypes';
 
 type AcademyProgress = Record<AcademyAreaId | 'puzzles', string[]>;
 
@@ -20,6 +21,7 @@ function isProgress(value: unknown): value is AcademyProgress {
 
 class AcademyProgressionService {
   private progress = this.load();
+  private listeners = new Set<() => void>();
 
   private load(): AcademyProgress {
     try {
@@ -40,10 +42,29 @@ class AcademyProgressionService {
     } catch (error) {
       console.warn('Academy progress could not be saved to local storage.', error);
     }
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   getCompleted(area: AcademyAreaId | 'puzzles') {
     return [...this.progress[area]];
+  }
+
+  getProgressMap(): AcademyProgressMap {
+    return {
+      games: [...this.progress.games],
+      openings: [...this.progress.openings],
+      strategy: [...this.progress.strategy],
+      puzzles: [...this.progress.puzzles],
+    };
   }
 
   markCompleted(area: AcademyAreaId | 'puzzles', id: string) {
@@ -51,6 +72,26 @@ class AcademyProgressionService {
     this.progress[area] = [...this.progress[area], id];
     this.save();
     return true;
+  }
+
+  replaceFromCloud(map: AcademyProgressMap) {
+    this.progress = {
+      games: [...(map.games || [])],
+      openings: [...(map.openings || [])],
+      strategy: [...(map.strategy || [])],
+      puzzles: [...(map.puzzles || [])],
+    };
+    this.save();
+  }
+
+  resetLocal() {
+    this.progress = {
+      games: [],
+      openings: [],
+      strategy: [],
+      puzzles: [],
+    };
+    this.save();
   }
 
   getTotalCompleted() {
