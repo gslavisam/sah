@@ -18,7 +18,7 @@ import type { SceneThemeId } from './services/sceneThemes';
 import type { OnlinePersonaId, PreferredSide, TimeControlId } from './shared/multiplayerTypes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 
-type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski';
+type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'klasicni';
 type AIDifficulty = 'easy' | 'medium' | 'hard';
 type CameraView = 'player' | 'top';
 type PromotionPieceType = 'queen' | 'rook' | 'bishop' | 'knight';
@@ -30,7 +30,7 @@ const PROMOTION_OPTIONS: { type: PromotionPieceType; label: string }[] = [
   { type: 'knight', label: 'Skakač' },
 ];
 
-const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski'];
+const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski', 'klasicni'];
 const AI_DIFFICULTY_ORDER: AIDifficulty[] = ['easy', 'medium', 'hard'];
 const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   wizard: 'Čarobnjački',
@@ -38,7 +38,8 @@ const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   dragon: 'Zmajevi i vitezovi',
   medieval: 'Srednji vek',
   vitez: 'Vitez',
-  srpski: 'Srpski'
+  srpski: 'Srpski',
+  klasicni: 'Klasični'
 };
 const AI_DIFFICULTY_NAMES: Record<AIDifficulty, string> = {
   easy: 'Lako',
@@ -60,6 +61,7 @@ export default function App() {
         saved === 'medieval' ||
         saved === 'vitez' ||
         saved === 'srpski' ||
+        saved === 'klasicni' ||
         saved === 'wizard'
       ) {
         return saved;

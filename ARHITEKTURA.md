@@ -121,9 +121,9 @@ Potezi u Akademiji emituju odvojeni `wizardchess:academy-move` događaj. `App` k
 - modele `pawn`, `rook`, `knight`, `bishop`, `queen` i `king`;
 - teksture, materijale i animacije koje dolaze uz te modele.
 
-Modele engine traži prvo kao gzip-kompresovani Base64 GLB iz `./assets/glb/`, pa pokušava običan `.glb` fajl kao rezervu. Pri početnom učitavanju dekompresuju se samo katedrala i podrazumevani `wizard` set (plus eventualno zapamćeni detaljni GLB set iz `localStorage`), dok se ostali detaljni GLB setovi (`vitez`, `srpski`) učitavaju lenjo (*lazy-load*) tek kada ih igrač prvi put izabere.
+Modele engine traži prvo kao gzip-kompresovani Base64 GLB iz `./assets/glb/`, pa pokušava običan `.glb` fajl kao rezervu. Pri početnom učitavanju dekompresuju se samo katedrala i podrazumevani `wizard` set (plus eventualno zapamćeni detaljni GLB set iz `localStorage`), dok se ostali detaljni GLB setovi (`vitez`, `srpski`, `klasicni`) učitavaju lenjo (*lazy-load*) tek kada ih igrač prvi put izabere.
 
-`setPieceSet('wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski')` menja prikaz svih figura uživo bez menjanja polja, poteza ili istorije partije. Podržano je šest setova: rigovani `wizard` GLB set, tri proceduralna seta (`ancient`, `dragon`, `medieval`) čija se geometrija oslobađa pri promeni seta, i dva detaljna dvobojna GLB seta (`vitez`, `srpski`). React čuva korisnikov izbor u `localStorage`.
+`setPieceSet('wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'klasicni')` menja prikaz svih figura uživo bez menjanja polja, poteza ili istorije partije. Podržano je sedam setova: rigovani `wizard` GLB set, tri proceduralna seta (`ancient`, `dragon`, `medieval`) čija se geometrija oslobađa pri promeni seta, i tri detaljna dvobojna GLB seta (`vitez`, `srpski`, `klasicni`). React čuva korisnikov izbor u `localStorage`.
 
 Dok je otvoren 2D modal (`set2DModeActive(true)`), potezi igrača i AI-ja izvršavaju se trenutno bez čekanja 3D animacije, a 3D render petlja miruje dok se korisnik ne vrati u 3D katedralu.
 

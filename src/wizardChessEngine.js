@@ -16,7 +16,7 @@ export function initWizardChess() {
     // =========================================================================
     const PIECE_TYPES = ['pawn', 'rook', 'knight', 'bishop', 'queen', 'king'];
     const PIECE_VALUES = { pawn: 100, knight: 320, bishop: 330, rook: 500, queen: 900, king: 20000 };
-    const PIECE_SET_IDS = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski'];
+    const PIECE_SET_IDS = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski', 'klasicni'];
     const BOARD_SQ_SIZE = 0.34;
     const BOARD_FIT_PIECE_HEIGHTS = {
       pawn: BOARD_SQ_SIZE * 1.1,
@@ -932,6 +932,7 @@ export function initWizardChess() {
     const pieceTemplates = {};
     const vitezPieceTemplates = {};
     const srpskiPieceTemplates = {};
+    const klasicniPieceTemplates = {};
     const boardFitLoadPromises = {};
     let loadBoardFitSetLazy = null;
     const activeMixers = [];
@@ -1327,7 +1328,11 @@ export function initWizardChess() {
       const loaderBar = document.getElementById('loader-bar');
       const loaderText = document.getElementById('loader-text');
 
-      const BOARD_FIT_SET_ENTRIES = [['vitez', vitezPieceTemplates], ['srpski', srpskiPieceTemplates]];
+      const BOARD_FIT_SET_ENTRIES = [
+        ['vitez', vitezPieceTemplates, 'medieval'],
+        ['srpski', srpskiPieceTemplates, 'medieval'],
+        ['klasicni', klasicniPieceTemplates, 'classic']
+      ];
 
       async function loadGltfModel(baseName) {
         let arrayBuffer = null;
@@ -1362,7 +1367,7 @@ export function initWizardChess() {
       loadBoardFitSetLazy = function ensureBoardFitPieceSetLoaded(targetSetId, onItemLoaded = null) {
         const entry = BOARD_FIT_SET_ENTRIES.find(([id]) => id === targetSetId);
         if (!entry) return Promise.resolve(false);
-        const [setId, templates] = entry;
+        const [setId, templates, modelPrefix] = entry;
         const alreadyLoaded = PIECE_TYPES.every(
           (t) => Boolean(templates[`${t}_w`]?.scene && templates[`${t}_b`]?.scene)
         );
@@ -1374,7 +1379,7 @@ export function initWizardChess() {
           for (const color of ['w', 'b']) {
             const folder = color === 'w' ? 'bele' : 'crne';
             tasks.push(
-              loadGltfModel(`${setId}/${folder}/medieval_${type}`).then(
+              loadGltfModel(`${setId}/${folder}/${modelPrefix}_${type}`).then(
                 (gltf) => {
                   templates[`${type}_${color}`] = {
                     scene: gltf.scene,
@@ -1651,7 +1656,8 @@ export function initWizardChess() {
 
       if (
         (desiredPieceSet === 'vitez' ||
-          desiredPieceSet === 'srpski') &&
+          desiredPieceSet === 'srpski' ||
+          desiredPieceSet === 'klasicni') &&
         loadBoardFitSetLazy
       ) {
         totalItems += PIECE_TYPES.length * 2;
@@ -2308,8 +2314,12 @@ export function initWizardChess() {
     }
 
     function instantiatePiece(type, color, r, c) {
-      const isBoardFitModelSet = activePieceSet === 'vitez' || activePieceSet === 'srpski';
-      const boardFitTemplates = activePieceSet === 'vitez' ? vitezPieceTemplates : srpskiPieceTemplates;
+      const isBoardFitModelSet = activePieceSet === 'vitez' || activePieceSet === 'srpski' || activePieceSet === 'klasicni';
+      const boardFitTemplates = activePieceSet === 'vitez'
+        ? vitezPieceTemplates
+        : activePieceSet === 'srpski'
+          ? srpskiPieceTemplates
+          : klasicniPieceTemplates;
       const tpl = isBoardFitModelSet
         ? boardFitTemplates[`${type}_${color}`]
         : pieceTemplates[`${type}_${color}`];
@@ -3028,11 +3038,13 @@ export function initWizardChess() {
       if (pieceSetId === activePieceSet) return true;
 
       const isBoardFitTarget =
-        pieceSetId === 'vitez' || pieceSetId === 'srpski';
+        pieceSetId === 'vitez' || pieceSetId === 'srpski' || pieceSetId === 'klasicni';
       const targetTemplates =
         pieceSetId === 'vitez'
           ? vitezPieceTemplates
-          : srpskiPieceTemplates;
+          : pieceSetId === 'srpski'
+            ? srpskiPieceTemplates
+            : klasicniPieceTemplates;
       const isTargetReady =
         !isBoardFitTarget ||
         PIECE_TYPES.every((t) => Boolean(targetTemplates[`${t}_w`]?.scene && targetTemplates[`${t}_b`]?.scene));
