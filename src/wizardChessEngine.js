@@ -16,7 +16,7 @@ export function initWizardChess() {
     // =========================================================================
     const PIECE_TYPES = ['pawn', 'rook', 'knight', 'bishop', 'queen', 'king'];
     const PIECE_VALUES = { pawn: 100, knight: 320, bishop: 330, rook: 500, queen: 900, king: 20000 };
-    const PIECE_SET_IDS = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski', 'srpski-kraljevski'];
+    const PIECE_SET_IDS = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski'];
     const BOARD_SQ_SIZE = 0.34;
     const BOARD_FIT_PIECE_HEIGHTS = {
       pawn: BOARD_SQ_SIZE * 1.1,
@@ -932,7 +932,6 @@ export function initWizardChess() {
     const pieceTemplates = {};
     const vitezPieceTemplates = {};
     const srpskiPieceTemplates = {};
-    const srpskiKraljevskiPieceTemplates = {};
     const boardFitLoadPromises = {};
     let loadBoardFitSetLazy = null;
     const activeMixers = [];
@@ -1328,7 +1327,7 @@ export function initWizardChess() {
       const loaderBar = document.getElementById('loader-bar');
       const loaderText = document.getElementById('loader-text');
 
-      const BOARD_FIT_SET_ENTRIES = [['vitez', vitezPieceTemplates], ['srpski', srpskiPieceTemplates], ['srpski-kraljevski', srpskiKraljevskiPieceTemplates]];
+      const BOARD_FIT_SET_ENTRIES = [['vitez', vitezPieceTemplates], ['srpski', srpskiPieceTemplates]];
 
       async function loadGltfModel(baseName) {
         let arrayBuffer = null;
@@ -1377,22 +1376,6 @@ export function initWizardChess() {
             tasks.push(
               loadGltfModel(`${setId}/${folder}/medieval_${type}`).then(
                 (gltf) => {
-                  if (setId === 'srpski-kraljevski' && color === 'b') {
-                    gltf.scene.traverse((child) => {
-                      if (child.isMesh && child.material) {
-                        const mats = Array.isArray(child.material) ? child.material : [child.material];
-                        for (const m of mats) {
-                          if (m && m.color) {
-                            const isOrnament = m.name && (m.name.includes('detail') || m.name.includes('metal'));
-                            m.color.multiplyScalar(isOrnament ? 0.35 : 0.24);
-                            if (typeof m.roughness === 'number') {
-                              m.roughness = Math.min(m.roughness, 0.40);
-                            }
-                          }
-                        }
-                      }
-                    });
-                  }
                   templates[`${type}_${color}`] = {
                     scene: gltf.scene,
                     animations: gltf.animations || []
@@ -1668,8 +1651,7 @@ export function initWizardChess() {
 
       if (
         (desiredPieceSet === 'vitez' ||
-          desiredPieceSet === 'srpski' ||
-          desiredPieceSet === 'srpski-kraljevski') &&
+          desiredPieceSet === 'srpski') &&
         loadBoardFitSetLazy
       ) {
         totalItems += PIECE_TYPES.length * 2;
@@ -2326,8 +2308,8 @@ export function initWizardChess() {
     }
 
     function instantiatePiece(type, color, r, c) {
-      const isBoardFitModelSet = activePieceSet === 'vitez' || activePieceSet === 'srpski' || activePieceSet === 'srpski-kraljevski';
-      const boardFitTemplates = activePieceSet === 'vitez' ? vitezPieceTemplates : (activePieceSet === 'srpski' ? srpskiPieceTemplates : srpskiKraljevskiPieceTemplates);
+      const isBoardFitModelSet = activePieceSet === 'vitez' || activePieceSet === 'srpski';
+      const boardFitTemplates = activePieceSet === 'vitez' ? vitezPieceTemplates : srpskiPieceTemplates;
       const tpl = isBoardFitModelSet
         ? boardFitTemplates[`${type}_${color}`]
         : pieceTemplates[`${type}_${color}`];
@@ -2344,9 +2326,6 @@ export function initWizardChess() {
       } else if (tpl && tpl.scene) {
         if (isBoardFitModelSet) {
           const model = SkeletonUtils.clone(tpl.scene);
-          if (activePieceSet === 'srpski-kraljevski') {
-            model.rotation.x = -Math.PI / 2;
-          }
           const modelBounds = new THREE.Box3().setFromObject(model);
           const modelSize = modelBounds.getSize(new THREE.Vector3());
           const modelScale = BOARD_FIT_PIECE_HEIGHTS[type] / modelSize.y;
@@ -3049,13 +3028,11 @@ export function initWizardChess() {
       if (pieceSetId === activePieceSet) return true;
 
       const isBoardFitTarget =
-        pieceSetId === 'vitez' || pieceSetId === 'srpski' || pieceSetId === 'srpski-kraljevski';
+        pieceSetId === 'vitez' || pieceSetId === 'srpski';
       const targetTemplates =
         pieceSetId === 'vitez'
           ? vitezPieceTemplates
-          : pieceSetId === 'srpski'
-            ? srpskiPieceTemplates
-            : srpskiKraljevskiPieceTemplates;
+          : srpskiPieceTemplates;
       const isTargetReady =
         !isBoardFitTarget ||
         PIECE_TYPES.every((t) => Boolean(targetTemplates[`${t}_w`]?.scene && targetTemplates[`${t}_b`]?.scene));

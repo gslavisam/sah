@@ -5,7 +5,7 @@
 ## Mogućnosti
 
 - 3D šahovska tabla, modelovane figure i animacije poteza i uzimanja figura.
-- Sedam stilova figura: čarobnjački GLB, proceduralni antički, „Zmajevi i vitezovi“, proceduralni „Srednji vek“ i zasebni GLB setovi „Vitez“, „Srpski“ i „Srpski kraljevski“, svaki sa belim i crnim modelima; izbor se čuva u pregledaču.
+- Šest stilova figura: čarobnjački GLB, proceduralni antički, „Zmajevi i vitezovi“, proceduralni „Srednji vek“ i zasebni GLB setovi „Vitez“ i „Srpski“, svaki sa belim i crnim modelima; izbor se čuva u pregledaču.
 - Igra protiv lokalnog šahovskog protivnika; izbor igranja belim ili crnim figurama.
 - Četiri pogleda kamere: igrački, odozgo, bočni i široki pogled na katedralu.
 - Tri AI komentatora: Alistair (mentor), Grix (goblin) i Valerius (rival).

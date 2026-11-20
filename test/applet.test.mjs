@@ -104,7 +104,7 @@ test('Procedural chess sets are selectable without replacing the existing sculpt
   const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
   const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
   assert.ok(appTsx.includes('wizard_chess_piece_set'), 'Piece set preference must persist locally');
-  assert.ok(engine.includes("PIECE_SET_IDS = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski', 'srpski-kraljevski']"), 'All seven piece set IDs must be supported');
+  assert.ok(engine.includes("PIECE_SET_IDS = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski']"), 'All six piece set IDs must be supported');
   assert.ok(engine.includes('function createAncientPiece(type, color)'), 'Ancient pieces must be generated procedurally');
   assert.ok(engine.includes('function createDragonPiece(type, color)'), 'Dragon and knight pieces must be generated procedurally');
   assert.ok(engine.includes('function createMedievalPiece(type, color)'), 'Medieval pieces must be generated procedurally');
@@ -124,8 +124,8 @@ test('Procedural chess sets are selectable without replacing the existing sculpt
   assert.ok(engine.includes("activePieceSet === 'medieval'"), 'Medieval set must be selectable');
   assert.ok(engine.includes("activePieceSet === 'vitez'"), 'Vitez GLB set must be selectable');
   assert.ok(engine.includes("activePieceSet === 'srpski'"), 'Srpski GLB set must be selectable');
-  assert.ok(engine.includes("activePieceSet === 'srpski-kraljevski'"), 'Srpski kraljevski GLB set must be selectable');
-  assert.ok(engine.includes("activePieceSet === 'vitez' ? vitezPieceTemplates : (activePieceSet === 'srpski' ? srpskiPieceTemplates : srpskiKraljevskiPieceTemplates)"), 'Detailed sets must load a separate model for each piece color');
+  assert.ok(engine.includes("activePieceSet === 'vitez' || activePieceSet === 'srpski'"), 'Detailed GLB sets must be selectable');
+  assert.ok(engine.includes("activePieceSet === 'vitez' ? vitezPieceTemplates : srpskiPieceTemplates"), 'Detailed sets must load a separate model for each piece color');
   assert.ok(engine.includes("const folder = color === 'w' ? 'bele' : 'crne'"), 'GLB paths must use the matching white or black assets');
   assert.ok(engine.includes('loadGltfModel(`${setId}/${folder}/medieval_${type}`)'), 'Both detailed sets must load models from their own asset folders');
   assert.ok(engine.includes("['vitez', vitezPieceTemplates], ['srpski', srpskiPieceTemplates]"), 'Both full-color GLB sets must be loaded');
@@ -142,7 +142,7 @@ test('Procedural chess sets are selectable without replacing the existing sculpt
   assert.ok(appTsx.includes("medieval: 'Srednji vek'"), 'Medieval set must have a localized name');
   assert.ok(appTsx.includes("vitez: 'Vitez'"), 'Vitez set must be selectable by name');
   assert.ok(appTsx.includes("srpski: 'Srpski'"), 'Srpski set must be selectable by name');
-  assert.ok(appTsx.includes("'srpski-kraljevski': 'Srpski kraljevski'"), 'Srpski kraljevski set must be selectable by name');
+  assert.ok(!appTsx.includes('srpski-kraljevski'), 'Srpski kraljevski set must be removed');
 });
 
 test('All 7 compressed 3D assets (.glb.gz.b64) decode and gunzip to valid glTF 2.0 binary models', () => {
@@ -177,7 +177,7 @@ test('All 7 compressed 3D assets (.glb.gz.b64) decode and gunzip to valid glTF 2
 test('Both 12-piece GLB sets decode to valid GLB 2.0 assets', () => {
   const pieceTypes = ['pawn', 'rook', 'knight', 'bishop', 'queen', 'king'];
   const colors = ['bele', 'crne'];
-  const pieceSets = ['vitez', 'srpski', 'srpski-kraljevski'];
+  const pieceSets = ['vitez', 'srpski'];
 
   for (const setId of pieceSets) {
     for (const color of colors) {
@@ -226,15 +226,11 @@ test('Academy publishes 12 puzzles and 12 lessons for each learning area', () =>
   assert.match(puzzleSource, /solution: \{ fromR: r, fromC: 1, toR: 1, toC: 1 \}/);
 });
 
-test('Piece set persistence includes srpski-kraljevski and extra GLB sets lazy-load on demand', () => {
+test('Piece set persistence excludes removed sets and extra GLB sets lazy-load on demand', () => {
   const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
   const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
 
-  assert.match(
-    appTsx,
-    /localStorage\.getItem\('wizard_chess_piece_set'\)[\s\S]*?saved === 'srpski-kraljevski'/,
-    'Saved srpski-kraljevski piece set must be restored on reload'
-  );
+  assert.ok(!appTsx.includes('srpski-kraljevski'), 'Removed srpski-kraljevski set must not be restored');
   assert.ok(
     engine.includes('function ensureBoardFitPieceSetLoaded(targetSetId'),
     'Detailed GLB sets must be lazy-loaded via ensureBoardFitPieceSetLoaded'
