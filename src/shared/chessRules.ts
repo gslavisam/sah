@@ -575,3 +575,16 @@ export function applyChessMove(
 
   return { ok: true, move: appliedMove, state: nextState };
 }
+
+const NORMAL_BOARD_INDICES = [0, 1, 2, 3, 4, 5, 6, 7] as const;
+const REVERSED_BOARD_INDICES = [7, 6, 5, 4, 3, 2, 1, 0] as const;
+
+export function get2DBoardOrientation(playerColor: PieceColor, flipped: boolean) {
+  const isViewFlipped = flipped ? playerColor === 'w' : playerColor === 'b';
+  return {
+    isViewFlipped,
+    rowIndices: isViewFlipped ? REVERSED_BOARD_INDICES : NORMAL_BOARD_INDICES,
+    colIndices: isViewFlipped ? REVERSED_BOARD_INDICES : NORMAL_BOARD_INDICES,
+  };
+}
+

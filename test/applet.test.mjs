@@ -492,3 +492,46 @@ test('Local auth endpoints and React AccountModal UI are wired without Firebase'
   assert.ok(!pkgJson.includes('firebase'), 'Firebase dependency must not be added');
 });
 
+test('2D board orientation renders White at bottom by default and rotates 180 degrees when flipped', async () => {
+  const { createInitialChessState, get2DBoardOrientation } = await import('../src/shared/chessRules.ts');
+  const board2dSrc = fs.readFileSync(path.join(ROOT, 'src/components/Classic2DBoard.tsx'), 'utf-8');
+  assert.ok(board2dSrc.includes('get2DBoardOrientation(playerColor, flipped)'));
+
+  const initial = createInitialChessState().board;
+  const isLight = (r, c) => (r + c) % 2 === 0;
+
+  // White default view (not flipped): top=r0 (Black), bottom=r7 (White), left=a (c0), right=h (c7)
+  const whiteNormal = get2DBoardOrientation('w', false);
+  assert.equal(whiteNormal.isViewFlipped, false);
+  assert.deepEqual([...whiteNormal.rowIndices], [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual([...whiteNormal.colIndices], [0, 1, 2, 3, 4, 5, 6, 7]);
+  // Bottom-right corner must be h1 (light square, White rook)
+  assert.equal(isLight(whiteNormal.rowIndices[7], whiteNormal.colIndices[7]), true);
+  assert.equal(initial[whiteNormal.rowIndices[7]][whiteNormal.colIndices[0]].color, 'w');
+  assert.equal(initial[whiteNormal.rowIndices[0]][whiteNormal.colIndices[0]].color, 'b');
+
+  // White flipped view ("Okreni"): 180deg rotation -> Black at bottom, h..a left-to-right, a8 (light) bottom-right
+  const whiteFlipped = get2DBoardOrientation('w', true);
+  assert.equal(whiteFlipped.isViewFlipped, true);
+  assert.deepEqual([...whiteFlipped.rowIndices], [7, 6, 5, 4, 3, 2, 1, 0]);
+  assert.deepEqual([...whiteFlipped.colIndices], [7, 6, 5, 4, 3, 2, 1, 0]);
+  assert.equal(isLight(whiteFlipped.rowIndices[7], whiteFlipped.colIndices[7]), true);
+  assert.equal(initial[whiteFlipped.rowIndices[7]][whiteFlipped.colIndices[0]].color, 'b');
+  assert.equal(initial[whiteFlipped.rowIndices[0]][whiteFlipped.colIndices[0]].color, 'w');
+
+  // Black default matches White flipped; Black flipped matches White default
+  const blackNormal = get2DBoardOrientation('b', false);
+  assert.deepEqual(blackNormal, whiteFlipped);
+  const blackFlipped = get2DBoardOrientation('b', true);
+  assert.deepEqual(blackFlipped, whiteNormal);
+});
+
+test('Gemini server proxy uses active gemini-4-hydrogen model and required User-Agent header', () => {
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf-8');
+  assert.ok(!serverSrc.includes('gemini-2.5-flash'), 'Deprecated gemini-2.5-flash model must not be used');
+  assert.ok(serverSrc.includes("model: 'gemini-4-hydrogen'"), 'Server must use active gemini-4-hydrogen model');
+  assert.ok(serverSrc.includes("'User-Agent': 'aistudio-build'"), 'GoogleGenAI client must set User-Agent header');
+});
+
+
+
