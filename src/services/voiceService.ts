@@ -79,9 +79,80 @@ const PRE_RENDERED_AUDIO: { key: string; persona: PersonaId; path: string }[] = 
   { key: 'pomeri svoje trupe prema centru', persona: 'rival', path: '/assets/audio/voices/rival/hint_2.mp3' },
 ];
 
+export type VoiceCue =
+  | 'blunder'
+  | 'check'
+  | 'capture'
+  | 'checkmate'
+  | 'draw'
+  | 'opening'
+  | 'undo'
+  | 'hint'
+  | 'general';
+
+const CUE_AUDIO_FILES: Record<Exclude<VoiceCue, 'draw'>, Record<PersonaId, string[]>> = {
+  blunder: {
+    mentor: ['/assets/audio/voices/mentor/blunder_0.mp3', '/assets/audio/voices/mentor/blunder_1.mp3'],
+    roast: ['/assets/audio/voices/roast/blunder_0.mp3', '/assets/audio/voices/roast/blunder_1.mp3'],
+    rival: ['/assets/audio/voices/rival/blunder_0.mp3', '/assets/audio/voices/rival/blunder_1.mp3'],
+  },
+  check: {
+    mentor: ['/assets/audio/voices/mentor/check_0.mp3', '/assets/audio/voices/mentor/check_1.mp3'],
+    roast: ['/assets/audio/voices/roast/check_0.mp3', '/assets/audio/voices/roast/check_1.mp3'],
+    rival: ['/assets/audio/voices/rival/check_0.mp3', '/assets/audio/voices/rival/check_1.mp3'],
+  },
+  capture: {
+    mentor: ['/assets/audio/voices/mentor/capture_0.mp3', '/assets/audio/voices/mentor/capture_1.mp3'],
+    roast: ['/assets/audio/voices/roast/capture_0.mp3', '/assets/audio/voices/roast/capture_1.mp3'],
+    rival: ['/assets/audio/voices/rival/capture_0.mp3', '/assets/audio/voices/rival/capture_1.mp3'],
+  },
+  checkmate: {
+    mentor: ['/assets/audio/voices/mentor/checkmate_0.mp3', '/assets/audio/voices/mentor/checkmate_1.mp3'],
+    roast: ['/assets/audio/voices/roast/checkmate_0.mp3', '/assets/audio/voices/roast/checkmate_1.mp3'],
+    rival: ['/assets/audio/voices/rival/checkmate_0.mp3', '/assets/audio/voices/rival/checkmate_1.mp3'],
+  },
+  opening: {
+    mentor: ['/assets/audio/voices/mentor/opening_0.mp3', '/assets/audio/voices/mentor/opening_1.mp3'],
+    roast: ['/assets/audio/voices/roast/opening_0.mp3', '/assets/audio/voices/roast/opening_1.mp3'],
+    rival: ['/assets/audio/voices/rival/opening_0.mp3', '/assets/audio/voices/rival/opening_1.mp3'],
+  },
+  undo: {
+    mentor: ['/assets/audio/voices/mentor/undo_0.mp3', '/assets/audio/voices/mentor/undo_1.mp3'],
+    roast: [
+      '/assets/audio/voices/roast/undo_0.mp3',
+      '/assets/audio/voices/roast/undo_1.mp3',
+      '/assets/audio/voices/roast/undo_2.mp3',
+    ],
+    rival: ['/assets/audio/voices/rival/undo_0.mp3', '/assets/audio/voices/rival/undo_1.mp3'],
+  },
+  hint: {
+    mentor: [
+      '/assets/audio/voices/mentor/hint_0.mp3',
+      '/assets/audio/voices/mentor/hint_1.mp3',
+      '/assets/audio/voices/mentor/hint_2.mp3',
+    ],
+    roast: [
+      '/assets/audio/voices/roast/hint_0.mp3',
+      '/assets/audio/voices/roast/hint_1.mp3',
+      '/assets/audio/voices/roast/hint_2.mp3',
+    ],
+    rival: [
+      '/assets/audio/voices/rival/hint_0.mp3',
+      '/assets/audio/voices/rival/hint_1.mp3',
+      '/assets/audio/voices/rival/hint_2.mp3',
+    ],
+  },
+  general: {
+    mentor: ['/assets/audio/voices/mentor/general_0.mp3', '/assets/audio/voices/mentor/general_1.mp3'],
+    roast: ['/assets/audio/voices/roast/general_0.mp3', '/assets/audio/voices/roast/general_1.mp3'],
+    rival: ['/assets/audio/voices/rival/general_0.mp3', '/assets/audio/voices/rival/general_1.mp3'],
+  },
+};
+
 class VoiceService {
   private enabled: boolean = true;
   private currentAudio: HTMLAudioElement | null = null;
+  private cueVariantIndex: Record<string, number> = {};
 
   constructor() {
     const saved = localStorage.getItem('wizard_voice_enabled');
@@ -114,7 +185,16 @@ class VoiceService {
     }
   }
 
-  public speak(text: string, personaId: PersonaId) {
+  private pickCueClip(personaId: PersonaId, voiceCue: VoiceCue): string {
+    const normalizedCue: Exclude<VoiceCue, 'draw'> = voiceCue === 'draw' ? 'general' : voiceCue;
+    const pool = CUE_AUDIO_FILES[normalizedCue]?.[personaId] || CUE_AUDIO_FILES.general[personaId];
+    const key = `${personaId}:${normalizedCue}`;
+    const idx = this.cueVariantIndex[key] || 0;
+    this.cueVariantIndex[key] = (idx + 1) % pool.length;
+    return pool[idx];
+  }
+
+  public speak(text: string, personaId: PersonaId, voiceCue?: VoiceCue) {
     if (!this.enabled || typeof window === 'undefined') {
       return;
     }
@@ -140,7 +220,13 @@ class VoiceService {
       return;
     }
 
-    // 2. Contextual keyword match for dynamic responses
+    // 2. Explicit Stockfish/engine voice cue (e.g. guaranteed blunder_0/1.mp3 on cpLoss >= 200)
+    if (voiceCue) {
+      this.playAudioFile(this.pickCueClip(personaId, voiceCue));
+      return;
+    }
+
+    // 3. Contextual keyword match for dynamic responses
     let fallbackPath = `/assets/audio/voices/${personaId}/general_0.mp3`;
 
     if (normalized.includes('mat')) {

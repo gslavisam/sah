@@ -5,6 +5,8 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { createSceneEnvironments } from './services/sceneEnvironments';
 import { SCENE_THEMES } from './services/sceneThemes';
 import { createOpponentHologramSystem } from './services/opponentHolograms';
+import { boardToFen } from './shared/chessRules';
+import { stockfishService } from './services/stockfishService';
 
 /** @type {any} */
 const THREE = THREE_NS;
@@ -1002,6 +1004,8 @@ export function initWizardChess() {
     scene.add(boardGroup);
     const squareHighlightsGroup = new THREE.Group();
     scene.add(squareHighlightsGroup);
+    const hintHighlightsGroup = new THREE.Group();
+    scene.add(hintHighlightsGroup);
     const selectedPieceAura = new THREE.Group();
     selectedPieceAura.name = 'selected-piece-aura';
     const selectionAuraMaterial = new THREE.MeshBasicMaterial({
@@ -2637,6 +2641,9 @@ export function initWizardChess() {
         console.warn('Cannot load academy position: invalid pieces or turn.');
         return false;
       }
+      aiSearchEpoch += 1;
+      isSearchingAIMove = false;
+      stockfishService.cancelPending();
       if (aiTimer) {
         clearTimeout(aiTimer);
         aiTimer = null;
@@ -2644,6 +2651,7 @@ export function initWizardChess() {
       activeMoveTweens.length = 0;
       clearCheckmateSequence();
       clearSquareHighlights();
+      clearHintHighlight();
       clearAllPieces();
       selectedSquare = null;
       validMoves = [];
@@ -2672,6 +2680,9 @@ export function initWizardChess() {
         console.warn('Cannot enter academy: already active or position is invalid.');
         return false;
       }
+      aiSearchEpoch += 1;
+      isSearchingAIMove = false;
+      stockfishService.cancelPending();
       completeCurrentMoveImmediately();
       if (aiTimer) {
         clearTimeout(aiTimer);
@@ -2800,6 +2811,9 @@ export function initWizardChess() {
 
     function syncOnlineSnapshot(roomState, assignedColor, options = {}) {
       if (!roomState || !roomState.chess) return false;
+      aiSearchEpoch += 1;
+      isSearchingAIMove = false;
+      stockfishService.cancelPending();
       if (academyMode) {
         academySavedState = null;
         academyMode = false;
@@ -2826,6 +2840,7 @@ export function initWizardChess() {
 
       clearAllPieces();
       clearSquareHighlights();
+      clearHintHighlight();
       selectedSquare = null;
       validMoves = [];
       isAnimatingMove = false;
@@ -2931,6 +2946,9 @@ export function initWizardChess() {
 
     function resetChessBoard(orientCamera = true, options = {}) {
       if (gameMode === 'online' && !options.force) return false;
+      aiSearchEpoch += 1;
+      isSearchingAIMove = false;
+      stockfishService.newGame();
       if (aiTimer) {
         clearTimeout(aiTimer);
         aiTimer = null;
@@ -2945,6 +2963,7 @@ export function initWizardChess() {
       orbitControls.enabled = true;
       clearAllPieces();
       clearSquareHighlights();
+      clearHintHighlight();
       selectedSquare = null;
       validMoves = [];
       currentTurn = 'w';
@@ -2982,7 +3001,15 @@ export function initWizardChess() {
       renderer.shadowMap.needsUpdate = true;
       updateTurnUI();
       if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-        window.dispatchEvent(new CustomEvent('wizardchess:reset'));
+        window.dispatchEvent(
+          new CustomEvent('wizardchess:reset', {
+            detail: {
+              fen: getFen(),
+              currentTurn,
+              playerColor,
+            },
+          })
+        );
       }
       maybeScheduleAIMove();
     }
@@ -2992,6 +3019,7 @@ export function initWizardChess() {
       selectedSquare = null;
       validMoves = [];
       clearSquareHighlights();
+      clearHintHighlight();
 
       for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
@@ -3344,6 +3372,65 @@ export function initWizardChess() {
       }
     }
 
+    function clearHintHighlight(dispatchEvent = true) {
+      while (hintHighlightsGroup.children.length > 0) {
+        const child = hintHighlightsGroup.children[0];
+        hintHighlightsGroup.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      }
+      if (dispatchEvent && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('wizardchess:hint', { detail: null }));
+      }
+    }
+
+    function showHintHighlight(fromR, fromC, toR, toC) {
+      clearHintHighlight(false);
+      const fromPos = boardToWorld(fromR, fromC);
+      const toPos = boardToWorld(toR, toC);
+
+      const fromGeo = new THREE.RingGeometry(0.12, 0.162, 32);
+      fromGeo.rotateX(-Math.PI / 2);
+      const fromMat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.92,
+        side: THREE.DoubleSide,
+      });
+      const fromMesh = new THREE.Mesh(fromGeo, fromMat);
+      fromMesh.position.set(fromPos.x, BOARD_SURFACE_Y + 0.014, fromPos.z);
+      hintHighlightsGroup.add(fromMesh);
+
+      const toGeo = new THREE.RingGeometry(0.11, 0.162, 32);
+      toGeo.rotateX(-Math.PI / 2);
+      const toMat = new THREE.MeshBasicMaterial({
+        color: 0xfacc15,
+        transparent: true,
+        opacity: 0.95,
+        side: THREE.DoubleSide,
+      });
+      const toMesh = new THREE.Mesh(toGeo, toMat);
+      toMesh.position.set(toPos.x, BOARD_SURFACE_Y + 0.015, toPos.z);
+      hintHighlightsGroup.add(toMesh);
+
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(
+          new CustomEvent('wizardchess:hint', {
+            detail: { fromR, fromC, toR, toC },
+          })
+        );
+      }
+    }
+
+    function getFen() {
+      return boardToFen(boardState, {
+        currentTurn,
+        enPassantTarget,
+        halfMoveClock,
+        moveCount: moveHistory.length,
+      });
+    }
+
     // =========================================================================
     // Stone Shatter Debris Physics (Shared VBO to avoid mid-attack GPU buffer allocation)
     // =========================================================================
@@ -3475,6 +3562,7 @@ export function initWizardChess() {
       isAnimatingMove = true;
       activeCamTransition = null;
       clearSquareHighlights();
+      clearHintHighlight();
       selectedSquare = null;
       validMoves = [];
 
@@ -3901,7 +3989,8 @@ export function initWizardChess() {
             drawReason,
             inCheck: nextInCheck,
             moveCount: moveHistory.length,
-            playerColor
+            playerColor,
+            fen: getFen()
           };
           window.dispatchEvent(
             academyMode
@@ -4451,11 +4540,90 @@ export function initWizardChess() {
       return true;
     }
 
+    let aiSearchEpoch = 0;
+    let isSearchingAIMove = false;
+
     function triggerAIMoveNow() {
-      if (gameMode === 'online' || isAnimatingMove || gameOver) return false;
-      const chosen = chooseSmartAIMove(currentTurn);
-      if (!chosen) return false;
-      return executeChessMove(chosen.fromR, chosen.fromC, chosen.toR, chosen.toC);
+      if (gameMode === 'online' || isAnimatingMove || gameOver || isSearchingAIMove) return false;
+
+      if (isAutomatedTest || !stockfishService.isSupportedEnvironment()) {
+        const chosen = chooseSmartAIMove(currentTurn);
+        if (!chosen) return false;
+        return executeChessMove(chosen.fromR, chosen.fromC, chosen.toR, chosen.toC);
+      }
+
+      const turnAtStart = currentTurn;
+      const searchEpoch = ++aiSearchEpoch;
+      isSearchingAIMove = true;
+      opponentHologram.setThinking(true);
+
+      stockfishService
+        .chooseBotMove(getFen(), activeSceneTheme || 'mentor', aiDifficulty)
+        .then((result) => {
+          if (
+            searchEpoch !== aiSearchEpoch ||
+            academyMode ||
+            gameMode !== 'single' ||
+            isAnimatingMove ||
+            gameOver ||
+            currentTurn !== turnAtStart
+          ) {
+            return;
+          }
+
+          let chosen = null;
+          if (result?.move) {
+            const legalForPiece = getLegalMovesForPiece(result.move.fromR, result.move.fromC);
+            const matched = legalForPiece.find(
+              (m) => m.r === result.move.toR && m.c === result.move.toC
+            );
+            if (matched) {
+              chosen = {
+                fromR: result.move.fromR,
+                fromC: result.move.fromC,
+                toR: result.move.toR,
+                toC: result.move.toC,
+                promotion: result.move.promotion,
+              };
+            }
+          }
+
+          if (!chosen) {
+            chosen = chooseSmartAIMove(turnAtStart);
+          }
+
+          if (chosen) {
+            executeChessMove(chosen.fromR, chosen.fromC, chosen.toR, chosen.toC, {
+              promotion: chosen.promotion,
+            });
+          }
+        })
+        .catch(() => {
+          if (
+            searchEpoch !== aiSearchEpoch ||
+            academyMode ||
+            gameMode !== 'single' ||
+            isAnimatingMove ||
+            gameOver ||
+            currentTurn !== turnAtStart
+          ) {
+            return;
+          }
+          const fallback = chooseSmartAIMove(turnAtStart);
+          if (fallback) {
+            executeChessMove(fallback.fromR, fallback.fromC, fallback.toR, fallback.toC);
+          }
+        })
+        .finally(() => {
+          if (searchEpoch === aiSearchEpoch) {
+            isSearchingAIMove = false;
+            if (currentTurn === playerColor || gameOver) {
+              opponentHologram.setThinking(false);
+            }
+          }
+        });
+
+      return true;
     }
 
     function maybeScheduleAIMove() {
@@ -4499,6 +4667,10 @@ export function initWizardChess() {
 
     function undoPlayerMove() {
       if (academyMode || gameMode === 'online' || isAnimatingMove) return false;
+      aiSearchEpoch += 1;
+      isSearchingAIMove = false;
+      stockfishService.cancelPending();
+      clearHintHighlight();
       if (aiTimer) {
         clearTimeout(aiTimer);
         aiTimer = null;
@@ -4533,6 +4705,7 @@ export function initWizardChess() {
               remainingMoves: moveHistory.length,
               currentTurn,
               playerColor,
+              fen: getFen(),
             },
           })
         );
@@ -5337,6 +5510,10 @@ export function initWizardChess() {
       getDrawReason: () => drawReason,
       isKingInCheck: (color) => isKingInCheck(color || currentTurn, boardState),
       isGameOver: () => gameOver,
+      getFen,
+      showHintHighlight,
+      clearHintHighlight,
+      getAIDifficulty: () => aiDifficulty,
       getGameContext: () => {
         const fileChars = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
         const legal = getAllLegalMoves(currentTurn);
@@ -5351,6 +5528,7 @@ export function initWizardChess() {
           drawReason,
           inCheck: isKingInCheck(currentTurn, boardState),
           moveCount: moveHistory.length,
+          fen: getFen(),
           legalMovesSummary
         };
       },

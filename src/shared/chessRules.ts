@@ -588,3 +588,268 @@ export function get2DBoardOrientation(playerColor: PieceColor, flipped: boolean)
   };
 }
 
+export type StockfishPersonaId = 'mentor' | 'roast' | 'rival';
+export type StockfishDifficulty = 'easy' | 'medium' | 'hard';
+export type MoveQuality = 'good' | 'inaccuracy' | 'mistake' | 'blunder';
+
+export interface FenBoardPiece {
+  type: PieceType;
+  color: PieceColor;
+  hasMoved?: boolean;
+}
+
+export interface ParsedUciMove {
+  uci: string;
+  fromR: number;
+  fromC: number;
+  toR: number;
+  toC: number;
+  fromSquare: string;
+  toSquare: string;
+  promotion?: PromotionPieceType;
+}
+
+export interface StockfishEval {
+  whiteCp: number;
+  mateIn: number | null;
+  bestMoveUci?: string | null;
+  depth?: number;
+}
+
+const FILE_CHARS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] as const;
+
+const FEN_PIECE_CHAR: Record<PieceType, string> = {
+  pawn: 'p',
+  rook: 'r',
+  knight: 'n',
+  bishop: 'b',
+  queen: 'q',
+  king: 'k',
+};
+
+const PROMO_CHAR_TO_TYPE: Record<string, PromotionPieceType> = {
+  q: 'queen',
+  r: 'rook',
+  b: 'bishop',
+  n: 'knight',
+};
+
+export function coordsToSquare(r: number, c: number): string {
+  if (r < 0 || r > 7 || c < 0 || c > 7) return '';
+  return `${FILE_CHARS[c]}${8 - r}`;
+}
+
+export function squareToCoords(square: string): { r: number; c: number } | null {
+  if (typeof square !== 'string' || square.length < 2) return null;
+  const c = square.charCodeAt(0) - 97;
+  const rank = Number(square[1]);
+  const r = 8 - rank;
+  if (c < 0 || c > 7 || r < 0 || r > 7 || Number.isNaN(rank)) return null;
+  return { r, c };
+}
+
+export function parseUciMove(uci: string): ParsedUciMove | null {
+  if (typeof uci !== 'string') return null;
+  const clean = uci.trim().toLowerCase();
+  if (clean.length < 4 || clean === '(none)') return null;
+  const fromSquare = clean.slice(0, 2);
+  const toSquare = clean.slice(2, 4);
+  const from = squareToCoords(fromSquare);
+  const to = squareToCoords(toSquare);
+  if (!from || !to) return null;
+  const promoChar = clean[4];
+  const promotion = promoChar ? PROMO_CHAR_TO_TYPE[promoChar] : undefined;
+  return {
+    uci: clean,
+    fromR: from.r,
+    fromC: from.c,
+    toR: to.r,
+    toC: to.c,
+    fromSquare,
+    toSquare,
+    promotion,
+  };
+}
+
+export function boardToFen(
+  board: (FenBoardPiece | null)[][],
+  options: {
+    currentTurn: PieceColor;
+    enPassantTarget?: { r: number; c: number } | null;
+    halfMoveClock?: number;
+    moveCount?: number;
+  }
+): string {
+  const rankRows: string[] = [];
+  for (let r = 0; r < 8; r++) {
+    let empty = 0;
+    let rowStr = '';
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r]?.[c];
+      if (!piece) {
+        empty += 1;
+      } else {
+        if (empty > 0) {
+          rowStr += String(empty);
+          empty = 0;
+        }
+        const ch = FEN_PIECE_CHAR[piece.type] || 'p';
+        rowStr += piece.color === 'w' ? ch.toUpperCase() : ch.toLowerCase();
+      }
+    }
+    if (empty > 0) rowStr += String(empty);
+    rankRows.push(rowStr);
+  }
+
+  let castling = '';
+  const wKing = board[7]?.[4];
+  if (wKing && wKing.type === 'king' && wKing.color === 'w' && !wKing.hasMoved) {
+    const wKRook = board[7]?.[7];
+    const wQRook = board[7]?.[0];
+    if (wKRook && wKRook.type === 'rook' && wKRook.color === 'w' && !wKRook.hasMoved) castling += 'K';
+    if (wQRook && wQRook.type === 'rook' && wQRook.color === 'w' && !wQRook.hasMoved) castling += 'Q';
+  }
+  const bKing = board[0]?.[4];
+  if (bKing && bKing.type === 'king' && bKing.color === 'b' && !bKing.hasMoved) {
+    const bKRook = board[0]?.[7];
+    const bQRook = board[0]?.[0];
+    if (bKRook && bKRook.type === 'rook' && bKRook.color === 'b' && !bKRook.hasMoved) castling += 'k';
+    if (bQRook && bQRook.type === 'rook' && bQRook.color === 'b' && !bQRook.hasMoved) castling += 'q';
+  }
+  if (!castling) castling = '-';
+
+  const epSq = options.enPassantTarget
+    ? coordsToSquare(options.enPassantTarget.r, options.enPassantTarget.c) || '-'
+    : '-';
+
+  const halfMove = Math.max(0, Math.floor(options.halfMoveClock ?? 0));
+  const fullMove = Math.max(1, Math.floor((options.moveCount ?? 0) / 2) + 1);
+  const turn = options.currentTurn === 'b' ? 'b' : 'w';
+
+  return `${rankRows.join('/')} ${turn} ${castling} ${epSq} ${halfMove} ${fullMove}`;
+}
+
+export function getStockfishEloProfile(
+  personaId: StockfishPersonaId | string,
+  difficulty: StockfishDifficulty | string
+): {
+  uciElo: number;
+  movetimeMs: number;
+  label: string;
+} {
+  const persona: StockfishPersonaId =
+    personaId === 'roast' || personaId === 'rival' ? personaId : 'mentor';
+  const diff: StockfishDifficulty =
+    difficulty === 'medium' || difficulty === 'hard' ? difficulty : 'easy';
+
+  const table: Record<StockfishPersonaId, Record<StockfishDifficulty, { uciElo: number; movetimeMs: number }>> = {
+    mentor: {
+      easy: { uciElo: 1320, movetimeMs: 110 },
+      medium: { uciElo: 1500, movetimeMs: 150 },
+      hard: { uciElo: 1750, movetimeMs: 210 },
+    },
+    roast: {
+      easy: { uciElo: 1400, movetimeMs: 120 },
+      medium: { uciElo: 1650, movetimeMs: 160 },
+      hard: { uciElo: 1950, movetimeMs: 220 },
+    },
+    rival: {
+      easy: { uciElo: 1550, movetimeMs: 130 },
+      medium: { uciElo: 1850, movetimeMs: 180 },
+      hard: { uciElo: 2200, movetimeMs: 240 },
+    },
+  };
+
+  const entry = table[persona][diff];
+  return {
+    ...entry,
+    label: `Elo ${entry.uciElo}`,
+  };
+}
+
+export function normalizeScoreToWhite(
+  scoreType: 'cp' | 'mate',
+  rawValue: number,
+  sideToMove: PieceColor
+): { whiteCp: number; mateIn: number | null } {
+  const sign = sideToMove === 'b' ? -1 : 1;
+  if (scoreType === 'mate') {
+    const mateIn = rawValue * sign;
+    const mag = Math.max(1, Math.abs(mateIn));
+    const whiteCp = mateIn === 0
+      ? (sideToMove === 'w' ? -10000 : 10000)
+      : (mateIn > 0 ? 10000 - mag * 10 : -10000 + mag * 10);
+    return { whiteCp, mateIn };
+  }
+  return {
+    whiteCp: rawValue * sign,
+    mateIn: null,
+  };
+}
+
+export function evalToDisplay(evalState: StockfishEval): {
+  whitePercent: number;
+  label: string;
+  advantageText: string;
+} {
+  if (evalState.mateIn !== null) {
+    if (evalState.mateIn === 0) {
+      const whiteWon = evalState.whiteCp >= 0;
+      return {
+        whitePercent: whiteWon ? 100 : 0,
+        label: 'Mat',
+        advantageText: whiteWon ? 'Šah-mat · Beli pobeđuje' : 'Šah-mat · Crni pobeđuje',
+      };
+    }
+    const whiteMates = evalState.mateIn > 0;
+    const moves = Math.abs(evalState.mateIn);
+    return {
+      whitePercent: whiteMates ? 100 : 0,
+      label: `${whiteMates ? '' : '-'}M${moves}`,
+      advantageText: whiteMates ? `Mat u ${moves} za belog` : `Mat u ${moves} za crnog`,
+    };
+  }
+
+  const cp = evalState.whiteCp;
+  const logistic = 50 + 50 * (2 / (1 + Math.exp(-0.004 * cp)) - 1);
+  const whitePercent = Math.max(4, Math.min(96, Math.round(logistic * 10) / 10));
+  const pawns = cp / 100;
+  const absPawns = Math.abs(pawns);
+  const label =
+    absPawns < 0.05
+      ? '0.0'
+      : `${pawns > 0 ? '+' : '-'}${absPawns >= 10 ? absPawns.toFixed(0) : absPawns.toFixed(1)}`;
+
+  let advantageText = 'Jednako';
+  if (cp >= 150) advantageText = 'Jasna prednost belog';
+  else if (cp >= 50) advantageText = 'Blaga prednost belog';
+  else if (cp <= -150) advantageText = 'Jasna prednost crnog';
+  else if (cp <= -50) advantageText = 'Blaga prednost crnog';
+
+  return { whitePercent, label, advantageText };
+}
+
+export function classifyPlayerMoveQuality(
+  evalBefore: StockfishEval,
+  evalAfter: StockfishEval,
+  playerColor: PieceColor
+): { quality: MoveQuality; cpLoss: number } {
+  const sign = playerColor === 'w' ? 1 : -1;
+  const playerBefore = evalBefore.whiteCp * sign;
+  const playerAfter = evalAfter.whiteCp * sign;
+  const cpLoss = Math.max(0, Math.round(playerBefore - playerAfter));
+
+  // Immediate forced mate against the player or dropping a forced mate of their own
+  if (cpLoss >= 200) {
+    return { quality: 'blunder', cpLoss };
+  }
+  if (cpLoss >= 100) {
+    return { quality: 'mistake', cpLoss };
+  }
+  if (cpLoss >= 45) {
+    return { quality: 'inaccuracy', cpLoss };
+  }
+  return { quality: 'good', cpLoss };
+}
+
+

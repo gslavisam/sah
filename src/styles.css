@@ -217,6 +217,7 @@ html, body, #root {
 body.cinematic-ui-hidden #hud-top,
 body.cinematic-ui-hidden #hud-bottom,
 body.cinematic-ui-hidden #hud-dock,
+body.cinematic-ui-hidden .eval-bar-hud,
 body.cinematic-ui-hidden .mobile-controls-trigger {
   opacity: 0 !important;
   pointer-events: none !important;
@@ -1467,6 +1468,7 @@ body.cinematic-ui-hidden .restore-ui-button {
 body.academy-puzzle-active #hud-top,
 body.academy-puzzle-active #hud-bottom,
 body.academy-puzzle-active #hud-dock,
+body.academy-puzzle-active .eval-bar-hud,
 body.academy-puzzle-active .mobile-controls-trigger,
 body.academy-puzzle-active .ai-bubble-container,
 body.academy-puzzle-active #checkmate-overlay {
@@ -2063,6 +2065,22 @@ body.academy-puzzle-active #checkmate-overlay {
   border-color: rgba(255, 255, 255, 0.28);
 }
 
+.chess-2d-btn-hint {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.42);
+}
+
+.chess-2d-btn-hint:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.28);
+  border-color: rgba(245, 158, 11, 0.72);
+}
+
+.chess-2d-btn:disabled {
+  opacity: 0.52;
+  cursor: default;
+}
+
 .chess-2d-btn-close {
   background: rgba(212, 175, 55, 0.18);
   color: #ffd875;
@@ -2077,7 +2095,8 @@ body.academy-puzzle-active #checkmate-overlay {
 .chess-2d-board-wrapper {
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: stretch;
+  gap: 10px;
   width: 100%;
 }
 
@@ -2136,6 +2155,15 @@ body.academy-puzzle-active #checkmate-overlay {
 /* King in check */
 .square-in-check {
   background: radial-gradient(circle, rgba(255, 20, 20, 0.9) 0%, rgba(200, 30, 30, 0.4) 65%, transparent 75%) !important;
+}
+
+/* Stockfish Hint highlight squares */
+.square-hint-from {
+  box-shadow: inset 0 0 0 3px #38bdf8, inset 0 0 14px rgba(56, 189, 248, 0.45);
+}
+
+.square-hint-to {
+  box-shadow: inset 0 0 0 3px #facc15, inset 0 0 16px rgba(250, 204, 21, 0.55);
 }
 
 /* Coordinates */
@@ -2212,6 +2240,17 @@ body.academy-puzzle-active #checkmate-overlay {
   color: #94a3b8;
   text-align: center;
   line-height: 1.4;
+}
+
+.chess-2d-active-hint {
+  display: inline-block;
+  color: #fde68a;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.32);
 }
 
 /* HUD Button for 2D Mode */
@@ -2982,5 +3021,138 @@ body.academy-puzzle-active #checkmate-overlay {
 .match-date {
   margin-left: auto;
 }
+
+/* =========================================================================
+   Stockfish Live Evaluation Bar (3D HUD + 2D Board)
+   ========================================================================= */
+
+.eval-bar-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.eval-bar-hud {
+  position: fixed;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 11;
+  width: 44px;
+  height: min(46vh, 330px);
+}
+
+.eval-bar-board2d {
+  flex: 0 0 auto;
+  width: 34px;
+  height: min(84vw, 520px);
+}
+
+.eval-score-badge {
+  width: 100%;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  text-align: center;
+  line-height: 1.15;
+  border: 1px solid rgba(212, 175, 55, 0.38);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+}
+
+.eval-score-badge.white-lead {
+  background: #f5f0e2;
+  color: #12151e;
+}
+
+.eval-score-badge.black-lead {
+  background: #141821;
+  color: #f5f0e2;
+}
+
+.eval-track {
+  position: relative;
+  flex: 1 1 auto;
+  width: 16px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #141821;
+  border: 1px solid rgba(212, 175, 55, 0.42);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6), inset 0 0 6px rgba(0, 0, 0, 0.65);
+}
+
+.eval-bar-board2d .eval-track {
+  width: 18px;
+}
+
+.eval-white-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, #fbf7ed 0%, #e5dcc7 100%);
+  will-change: transform;
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.eval-mid-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: rgba(212, 175, 55, 0.68);
+  pointer-events: none;
+}
+
+.eval-bar-shell.is-evaluating .eval-score-badge {
+  border-color: rgba(245, 215, 110, 0.85);
+}
+
+@media (max-width: 768px) {
+  .eval-bar-hud {
+    right: 8px;
+    top: 44%;
+    width: 38px;
+    height: min(32vh, 210px);
+  }
+
+  .eval-bar-hud .eval-score-badge {
+    font-size: 0.64rem;
+    padding: 2px 3px;
+  }
+
+  .eval-bar-hud .eval-track {
+    width: 12px;
+  }
+
+  .chess-2d-board-wrapper {
+    gap: 6px;
+  }
+
+  .eval-bar-board2d {
+    width: 28px;
+    height: min(78vw, 520px);
+  }
+
+  .eval-bar-board2d .eval-score-badge {
+    font-size: 0.62rem;
+    padding: 2px;
+  }
+
+  .eval-bar-board2d .eval-track {
+    width: 13px;
+  }
+
+  .chess-2d-board {
+    width: min(78vw, 520px);
+    height: min(78vw, 520px);
+  }
+}
+
 
 

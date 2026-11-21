@@ -1,3 +1,5 @@
+import type { MoveQuality } from '../shared/chessRules';
+
 export type PersonaId = 'mentor' | 'roast' | 'rival';
 
 export interface Persona {
@@ -73,6 +75,18 @@ export interface MoveEventDetail {
   inCheck: boolean;
   moveCount: number;
   playerColor: 'w' | 'b';
+  fen?: string;
+  moveQuality?: MoveQuality;
+  cpLoss?: number;
+  evalLabel?: string;
+}
+
+export interface StockfishHintContext {
+  fromSquare: string;
+  toSquare: string;
+  pieceType?: string;
+  promotion?: string;
+  evalLabel?: string;
 }
 
 const PIECE_NAMES_SR: Record<string, string> = {
@@ -82,6 +96,15 @@ const PIECE_NAMES_SR: Record<string, string> = {
   bishop: 'lovca',
   queen: 'kraljicu',
   king: 'kralja',
+};
+
+const PIECE_NOM_SR: Record<string, string> = {
+  pawn: 'pešak',
+  rook: 'top',
+  knight: 'skakač',
+  bishop: 'lovac',
+  queen: 'kraljica',
+  king: 'kralj',
 };
 
 // Offline fallback responses for instant responsiveness and when no API key is set
@@ -243,11 +266,14 @@ class GeminiService {
     if (this.serverConfigured === false) {
       return null;
     }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     try {
       const res = await fetch('/api/gemini/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         return null;
@@ -259,6 +285,8 @@ class GeminiService {
       return data?.text?.trim() || null;
     } catch {
       return null;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -280,6 +308,8 @@ class GeminiService {
       fallback = getRandom(pool.draw);
     } else if (detail.inCheck) {
       fallback = getRandom(isPlayerMove ? pool.check : pool.aiCheck);
+    } else if (isPlayerMove && detail.moveQuality === 'blunder') {
+      fallback = getRandom(pool.blunder);
     } else if (detail.move?.capture) {
       fallback = getRandom(isPlayerMove ? pool.capture : pool.blunder);
     } else if (detail.moveCount <= 4) {
@@ -320,6 +350,14 @@ class GeminiService {
               ? 'Igrač je dao ŠAH protivniku!'
               : 'AI protivnik je dao ŠAH igraču!'
             : 'Partija se nastavlja.';
+      const qualityNote =
+        isPlayerMove && detail.moveQuality === 'blunder'
+          ? `- Šahovska ocena poteza: VELIKA GREŠKA / BLUNDER (igrač je izgubio oko ${Math.max(200, detail.cpLoss || 200) / 100} pešaka prednosti${detail.evalLabel ? `, ocena ${detail.evalLabel}` : ''}). Reaguj na ovu grešku u svom stilu!`
+          : isPlayerMove && detail.moveQuality === 'mistake'
+            ? `- Šahovska ocena poteza: nepreciznost / greška (${detail.cpLoss ? `-${(detail.cpLoss / 100).toFixed(1)} pešaka` : 'pad pozicije'}).`
+            : detail.evalLabel
+              ? `- Procena pozicije (ne spominji suvoparne brojeve): ${detail.evalLabel}.`
+              : '';
 
       const prompt = `${persona.systemPrompt}
 
@@ -328,6 +366,7 @@ Trenutno stanje u igri:
 - Potez broj: ${detail.moveCount}
 - Poslednji potez: ${moveStr}
 - Ishod poteza: ${outcomeStr}
+${qualityNote}
 ${boardDescription ? `- Dodatni opis table: ${boardDescription}` : ''}
 
 Napiši kratku reakciju (1-2 rečenice) u svom karakteru, obraćajući se direktno igraču.`;
@@ -382,35 +421,64 @@ Prokomentariši to u 1 do 2 kratke rečenice u svom karakteru!`;
   public async getHint(
     personaId: PersonaId,
     currentTurn: 'w' | 'b',
-    legalMovesSummary?: string[]
+    legalMovesSummary?: string[],
+    stockfishHint?: StockfishHintContext | null
   ): Promise<string> {
     const persona = PERSONAS[personaId] || PERSONAS.mentor;
 
-    const configured = await this.checkServerStatus();
-    if (!configured) {
+    const buildConcreteFallback = () => {
+      if (stockfishHint) {
+        const pieceAcc = stockfishHint.pieceType
+          ? PIECE_NAMES_SR[stockfishHint.pieceType] || 'figuru'
+          : 'figuru';
+        const pieceNom = stockfishHint.pieceType
+          ? PIECE_NOM_SR[stockfishHint.pieceType] || 'figura'
+          : 'figura';
+        const promoSuffix = stockfishHint.promotion
+          ? ` (promocija u ${PIECE_NAMES_SR[stockfishHint.promotion] || stockfishHint.promotion})`
+          : '';
+        if (personaId === 'roast') {
+          return `💡 Ako već ne vidiš očigledno: pomeri ${pieceAcc} sa ${stockfishHint.fromSquare} na ${stockfishHint.toSquare}${promoSuffix}. Zahvali mi kasnije!`;
+        }
+        if (personaId === 'rival') {
+          return `💡 Čak bi i šegrt video da ${pieceNom} sa ${stockfishHint.fromSquare} treba na ${stockfishHint.toSquare}${promoSuffix}. Povuči potez ako smeš!`;
+        }
+        return `💡 Obrati pažnju na polja koja sam označio: pomeri ${pieceAcc} sa ${stockfishHint.fromSquare} na ${stockfishHint.toSquare}${promoSuffix} da ojačaš poziciju.`;
+      }
       const offlineHints = [
         '💡 Obrati pažnju na kontrolu centralnih polja i sigurnost svog kralja pre nego što kreneš u napad!',
         '💡 Proveri da li neka od tvojih figura stoji nebranjena — dobar igrač uvek prvo štiti svoje trupe.',
         '💡 Potraži figure koje još nisu razvijene sa početnih polja i uvedi ih u igru!',
       ];
       return getRandom(offlineHints);
+    };
+
+    const configured = await this.checkServerStatus();
+    if (!configured) {
+      return buildConcreteFallback();
     }
 
     try {
       const movesStr = legalMovesSummary?.slice(0, 8).join(', ') || 'Nema dostupnih poteza.';
+      const stockfishStr = stockfishHint
+        ? `- Najbolji potez po šahovskom endžinu: ${stockfishHint.pieceType ? PIECE_NOM_SR[stockfishHint.pieceType] || stockfishHint.pieceType : 'figura'} sa polja ${stockfishHint.fromSquare} na ${stockfishHint.toSquare}${stockfishHint.promotion ? ` (promocija u ${PIECE_NAMES_SR[stockfishHint.promotion] || stockfishHint.promotion})` : ''}. (Polja su već označena na tabli.)`
+        : `- Neki od dozvoljenih poteza su: ${movesStr}.`;
+
       const prompt = `${persona.systemPrompt}
 
 Igrač je tražio SAVET za sledeći potez.
 - Na potezu je: ${currentTurn === 'w' ? 'Beli' : 'Crni'}.
-- Neki od dozvoljenih poteza su: ${movesStr}.
+${stockfishStr}
 
-Daj početniku jedan prijateljski, jasan savet šta da traži na tabli ili koju figuru da aktivira. Maksimalno 2 rečenice!`;
+${stockfishHint
+  ? `Objasni igraču u 1-2 rečenice u svom karakteru zašto je potez sa ${stockfishHint.fromSquare} na ${stockfishHint.toSquare} najbolji (spomeni figuru i ciljno polje ${stockfishHint.toSquare}, bez suvoparno dugačkih analiza).`
+  : 'Daj početniku jedan prijateljski, jasan savet šta da traži na tabli ili koju figuru da aktivira. Maksimalno 2 rečenice!'}`;
 
       const text = await this.generateViaProxy(prompt);
-      return text || '💡 Pazi na centar table i uvek proveri gde protivnik može da uzvrati!';
+      return text || buildConcreteFallback();
     } catch (err) {
       console.warn('Gemini hint error, using fallback:', err);
-      return '💡 Pokušaj da aktiviraš figuru koja do sada nije učestvovala u borbi!';
+      return buildConcreteFallback();
     }
   }
 }

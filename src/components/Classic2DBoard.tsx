@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Chess2DPiece, PieceType, PieceColor } from './Chess2DPiece';
-import { get2DBoardOrientation } from '../shared/chessRules';
+import { EvalBar } from './EvalBar';
+import { get2DBoardOrientation, type StockfishEval } from '../shared/chessRules';
 
 export interface PromotionRequest {
   fromR: number;
@@ -13,6 +14,11 @@ export interface PromotionRequest {
 interface Props {
   isOpen: boolean;
   isOnlineMode?: boolean;
+  evalState?: StockfishEval | null;
+  isEvaluating?: boolean;
+  hintMessage?: string;
+  isLoadingHint?: boolean;
+  onRequestHint?: () => void;
   onClose: () => void;
   onUndoMove: () => void;
   onRequestPromotion: (req: PromotionRequest) => void;
@@ -40,11 +46,23 @@ interface LastMove {
   toC: number;
 }
 
+interface HintCoords {
+  fromR: number;
+  fromC: number;
+  toR: number;
+  toC: number;
+}
+
 type DrawReason = 'stalemate' | 'fifty-move' | 'repetition' | null;
 
 export const Classic2DBoard: React.FC<Props> = ({
   isOpen,
   isOnlineMode = false,
+  evalState = null,
+  isEvaluating = false,
+  hintMessage,
+  isLoadingHint = false,
+  onRequestHint,
   onClose,
   onUndoMove,
   onRequestPromotion,
@@ -55,6 +73,7 @@ export const Classic2DBoard: React.FC<Props> = ({
   const [selectedSquare, setSelectedSquare] = useState<{ r: number; c: number } | null>(null);
   const [validMoves, setValidMoves] = useState<MoveCoord[]>([]);
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
+  const [hintCoords, setHintCoords] = useState<HintCoords | null>(null);
   const [currentTurn, setCurrentTurn] = useState<PieceColor>('w');
   const [playerColor, setPlayerColor] = useState<PieceColor>('w');
   const [flipped, setFlipped] = useState(false);
@@ -105,19 +124,27 @@ export const Classic2DBoard: React.FC<Props> = ({
     const handleSync = () => {
       setSelectedSquare(null);
       setValidMoves([]);
+      setHintCoords(null);
       syncBoardFromEngine();
+    };
+
+    const handleHint = (e: Event) => {
+      const detail = (e as CustomEvent<HintCoords | null>).detail;
+      setHintCoords(detail || null);
     };
 
     window.addEventListener('wizardchess:move', handleSync);
     window.addEventListener('wizardchess:reset', handleSync);
     window.addEventListener('wizardchess:undo', handleSync);
     window.addEventListener('wizardchess:online-sync', handleSync);
+    window.addEventListener('wizardchess:hint', handleHint);
 
     return () => {
       window.removeEventListener('wizardchess:move', handleSync);
       window.removeEventListener('wizardchess:reset', handleSync);
       window.removeEventListener('wizardchess:undo', handleSync);
       window.removeEventListener('wizardchess:online-sync', handleSync);
+      window.removeEventListener('wizardchess:hint', handleHint);
     };
   }, [isOpen, syncBoardFromEngine]);
 
@@ -221,7 +248,7 @@ export const Classic2DBoard: React.FC<Props> = ({
         ? '🤝 REMI! Pravilo 50 poteza'
         : '🤝 PAT! Partija je završena remijem';
 
-  const { rowIndices, colIndices } = get2DBoardOrientation(playerColor, flipped);
+  const { isViewFlipped, rowIndices, colIndices } = get2DBoardOrientation(playerColor, flipped);
   const fileLetters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
   return (
@@ -274,6 +301,17 @@ export const Classic2DBoard: React.FC<Props> = ({
                 >
                   ⚡ AI
                 </button>
+                {onRequestHint && (
+                  <button
+                    type="button"
+                    className="chess-2d-btn chess-2d-btn-hint"
+                    onClick={onRequestHint}
+                    disabled={gameOver || isLoadingHint}
+                    title="Zatraži Stockfish savet za sledeći potez"
+                  >
+                    {isLoadingHint ? '⏳...' : '💡 Savet'}
+                  </button>
+                )}
               </>
             )}
             <button
@@ -306,8 +344,16 @@ export const Classic2DBoard: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Board wrapper with ranks & files coordinates */}
+        {/* Board wrapper with EvalBar + ranks & files coordinates */}
         <div className="chess-2d-board-wrapper">
+          {!isOnlineMode && (
+            <EvalBar
+              evalState={evalState}
+              flipped={isViewFlipped}
+              isEvaluating={isEvaluating}
+              variant="board2d"
+            />
+          )}
           <div className="chess-2d-board">
             {rowIndices.map((r) => (
               <div key={r} className="chess-2d-row">
@@ -320,6 +366,8 @@ export const Classic2DBoard: React.FC<Props> = ({
                     lastMove &&
                     ((lastMove.fromR === r && lastMove.fromC === c) ||
                       (lastMove.toR === r && lastMove.toC === c));
+                  const isHintFrom = hintCoords?.fromR === r && hintCoords?.fromC === c;
+                  const isHintTo = hintCoords?.toR === r && hintCoords?.toC === c;
                   const isKingCheck =
                     inCheck && piece?.type === 'king' && piece?.color === currentTurn;
 
@@ -329,6 +377,8 @@ export const Classic2DBoard: React.FC<Props> = ({
                       className={`chess-2d-square ${isLight ? 'square-light' : 'square-dark'} ${
                         isSelected ? 'square-selected' : ''
                       } ${isLastMoveSquare ? 'square-lastmove' : ''} ${
+                        isHintFrom ? 'square-hint-from' : ''
+                      } ${isHintTo ? 'square-hint-to' : ''} ${
                         isKingCheck ? 'square-in-check' : ''
                       }`}
                       onClick={() => handleSquareClick(r, c)}
@@ -364,9 +414,13 @@ export const Classic2DBoard: React.FC<Props> = ({
 
         {/* Bottom hint bar */}
         <div className="chess-2d-footer">
-          <span>
-            💡 <strong>Savet:</strong> Klikni na figuru da vidiš legalna polja. Prečica <strong>U</strong> vraća potez, a <strong>Esc</strong> ili dugme gore vraća te u 3D katedralu.
-          </span>
+          {!isOnlineMode && hintCoords && hintMessage ? (
+            <span className="chess-2d-active-hint">{hintMessage}</span>
+          ) : (
+            <span>
+              💡 <strong>Savet:</strong> Klikni na figuru da vidiš legalna polja. Prečica <strong>U</strong> vraća potez, a <strong>Esc</strong> ili dugme gore vraća te u 3D katedralu.
+            </span>
+          )}
         </div>
       </div>
     </div>

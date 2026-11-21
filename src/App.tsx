@@ -9,14 +9,22 @@ import { Chess2DPiece } from './components/Chess2DPiece';
 import { OnlineDuelModal } from './components/OnlineDuelModal';
 import { OnlineMatchBar } from './components/OnlineMatchBar';
 import { AccountModal } from './components/AccountModal';
-import { PERSONAS, PersonaId, geminiService, MoveEventDetail } from './services/geminiService';
+import { EvalBar } from './components/EvalBar';
+import { PERSONAS, PersonaId, geminiService, MoveEventDetail, type StockfishHintContext } from './services/geminiService';
 import { soundService } from './services/soundService';
 import { progressionService } from './services/progressionService';
 import { authService, type AuthSnapshot } from './services/authService';
 import { multiplayerService, type OnlineSessionSnapshot } from './services/multiplayerService';
+import { stockfishService } from './services/stockfishService';
+import type { VoiceCue } from './services/voiceService';
 import type { SceneThemeId } from './services/sceneThemes';
 import type { OnlinePersonaId, PreferredSide, TimeControlId } from './shared/multiplayerTypes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
+import {
+  classifyPlayerMoveQuality,
+  evalToDisplay,
+  type StockfishEval,
+} from './shared/chessRules';
 
 type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'klasicni';
 type AIDifficulty = 'easy' | 'medium' | 'hard';
@@ -88,8 +96,16 @@ export default function App() {
   const [aiMessage, setAiMessage] = useState(
     'Pozdrav, šegrte! Ja sam Alistair. Tu sam da te vodim i učinim svaki potez jasnim.'
   );
+  const [aiVoiceCue, setAiVoiceCue] = useState<VoiceCue | undefined>(undefined);
   const [isLoadingAI, setIsLoadingAI] = useState(false);
+  const [evalState, setEvalState] = useState<StockfishEval | null>({ whiteCp: 0, mateIn: null });
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [playerColor, setPlayerColor] = useState<'w' | 'b'>('w');
+  const evalBeforeRef = useRef<StockfishEval>({ whiteCp: 0, mateIn: null });
+  const evalReqSeqRef = useRef(0);
   const [academyVisible, setAcademyVisible] = useState(false);
+  const academyVisibleRef = useRef(academyVisible);
+  academyVisibleRef.current = academyVisible;
   const [academyView, setAcademyView] = useState<'home' | 'puzzle'>('home');
   const [academyPuzzleId, setAcademyPuzzleId] = useState<string | null>(null);
   const [academyFeedback, setAcademyFeedback] = useState<'idle' | 'wrong' | 'solved'>('idle');
@@ -125,6 +141,7 @@ export default function App() {
     selectedPersonaRef.current = id;
     applySceneTheme(id);
     const p = PERSONAS[id];
+    setAiVoiceCue(undefined);
     if (id === 'mentor') {
       setAiMessage(`Pozdrav, šegrte! Ja sam ${p.name}. Tu sam da te vodim i učinim svaki potez jasnim.`);
     } else if (id === 'roast') {
@@ -145,6 +162,12 @@ export default function App() {
       console.warn(`Could not apply AI difficulty: ${aiDifficulty}.`);
     }
     applySceneTheme(selectedPersonaRef.current);
+    if (!isOnlineModeRef.current) {
+      void stockfishService.init();
+    }
+    return () => {
+      stockfishService.terminate();
+    };
   }, []);
 
   useEffect(() => {
@@ -158,6 +181,12 @@ export default function App() {
       onRoomEntered: (yourColor, state, isRematch) => {
         setAcademyVisible(false);
         setPendingPromotion(null);
+        evalReqSeqRef.current += 1;
+        stockfishService.cancelPending();
+        setEvalState(null);
+        setIsEvaluating(false);
+        setAiVoiceCue(undefined);
+        setPlayerColor(yourColor);
         const win = window as Window & {
           wizardChess?: {
             enterOnlineMode?: (roomState: typeof state, assignedColor: typeof yourColor) => boolean;
@@ -402,17 +431,39 @@ export default function App() {
   };
 
   const handleUndoMove = async () => {
-    if (isOnlineModeRef.current) return;
+    if (isOnlineModeRef.current || academyVisibleRef.current) return;
     setPendingPromotion(null);
-    const win = window as unknown as { wizardChess?: { undoPlayerMove?: () => boolean } };
+    const win = window as unknown as {
+      wizardChess?: { undoPlayerMove?: () => boolean; getFen?: () => string };
+    };
     const success = win.wizardChess?.undoPlayerMove?.();
     if (success) {
       soundService.playUndo();
+      stockfishService.cancelPending();
+      const undoFen = win.wizardChess?.getFen?.();
+      if (undoFen) {
+        const evalSeq = ++evalReqSeqRef.current;
+        setIsEvaluating(true);
+        void stockfishService
+          .evaluatePosition(undoFen, 120)
+          .then((evalRes) => {
+            if (evalSeq !== evalReqSeqRef.current || !evalRes) return;
+            evalBeforeRef.current = evalRes;
+            setEvalState(evalRes);
+          })
+          .finally(() => {
+            if (evalSeq === evalReqSeqRef.current) {
+              setIsEvaluating(false);
+            }
+          });
+      }
+
       const reqId = ++aiRequestSeqRef.current;
       setIsLoadingAI(true);
       try {
         const reaction = await geminiService.getUndoReaction(selectedPersonaRef.current);
         if (reqId === aiRequestSeqRef.current) {
+          setAiVoiceCue('undo');
           setAiMessage(reaction);
         }
       } catch (err) {
@@ -431,6 +482,7 @@ export default function App() {
       if (!customEvt.detail) return;
 
       const detail = customEvt.detail;
+      setPlayerColor(detail.playerColor);
       const isPlayerMove = detail.move ? detail.move.color === detail.playerColor : false;
       const isCheckmate = Boolean(
         detail.isCheckmate ?? (detail.gameOver && detail.inCheck && !detail.drawReason)
@@ -476,8 +528,71 @@ export default function App() {
       const reqId = ++aiRequestSeqRef.current;
       setIsLoadingAI(true);
       try {
-        const reaction = await geminiService.getReaction(selectedPersonaRef.current, detail);
+        let voiceCue: VoiceCue = isCheckmate
+          ? 'checkmate'
+          : isDraw
+            ? 'draw'
+            : detail.inCheck
+              ? 'check'
+              : detail.move?.capture
+                ? isPlayerMove
+                  ? 'capture'
+                  : 'blunder'
+                : detail.moveCount <= 4
+                  ? 'opening'
+                  : 'general';
+
+        const enrichedDetail: MoveEventDetail = { ...detail };
+
+        if (!isOnlineModeRef.current && !academyVisibleRef.current) {
+          if (isCheckmate) {
+            const mateEval: StockfishEval = {
+              whiteCp: detail.currentTurn === 'w' ? -10000 : 10000,
+              mateIn: 0,
+            };
+            evalBeforeRef.current = mateEval;
+            setEvalState(mateEval);
+            enrichedDetail.evalLabel = evalToDisplay(mateEval).label;
+          } else if (isDraw) {
+            const drawEval: StockfishEval = { whiteCp: 0, mateIn: null };
+            evalBeforeRef.current = drawEval;
+            setEvalState(drawEval);
+            enrichedDetail.evalLabel = evalToDisplay(drawEval).label;
+          } else if (detail.fen) {
+            const evalSeq = ++evalReqSeqRef.current;
+            setIsEvaluating(true);
+            try {
+              const nextEval = await stockfishService.evaluatePosition(detail.fen, 120);
+              if (nextEval && evalSeq === evalReqSeqRef.current && !isOnlineModeRef.current && !academyVisibleRef.current) {
+                const prevEval = evalBeforeRef.current;
+                evalBeforeRef.current = nextEval;
+                setEvalState(nextEval);
+                enrichedDetail.evalLabel = evalToDisplay(nextEval).label;
+
+                if (isPlayerMove) {
+                  const { quality, cpLoss } = classifyPlayerMoveQuality(
+                    prevEval,
+                    nextEval,
+                    detail.playerColor
+                  );
+                  enrichedDetail.moveQuality = quality;
+                  enrichedDetail.cpLoss = cpLoss;
+                  if (quality === 'blunder' && !detail.inCheck) {
+                    voiceCue = 'blunder';
+                  }
+                }
+              }
+            } finally {
+              if (evalSeq === evalReqSeqRef.current) {
+                setIsEvaluating(false);
+              }
+            }
+          }
+        }
+
+        const reaction = await geminiService.getReaction(selectedPersonaRef.current, enrichedDetail);
         if (reqId === aiRequestSeqRef.current) {
+          setAiVoiceCue(voiceCue);
           setAiMessage(reaction);
         }
       } catch (err) {
@@ -489,11 +604,23 @@ export default function App() {
       }
     };
 
-    const handleResetEvent = () => {
+    const handleResetEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ playerColor?: 'w' | 'b' }>).detail;
       aiRequestSeqRef.current += 1;
+      evalReqSeqRef.current += 1;
       setIsLoadingAI(false);
+      setIsEvaluating(false);
       setPendingPromotion(null);
+      evalBeforeRef.current = { whiteCp: 0, mateIn: null };
+      if (!isOnlineModeRef.current && !academyVisibleRef.current) {
+        stockfishService.newGame();
+        setEvalState({ whiteCp: 0, mateIn: null });
+      }
+      if (detail?.playerColor === 'w' || detail?.playerColor === 'b') {
+        setPlayerColor(detail.playerColor);
+      }
       const p = PERSONAS[selectedPersonaRef.current];
+      setAiVoiceCue(undefined);
       setAiMessage(`Nova partija je započeta na oltaru! ${p.name} je spreman za tvoj potez.`);
     };
 
@@ -538,6 +665,9 @@ export default function App() {
       setAcademyError('Zadatak nije mogao da se učita. Pokušaj ponovo ili se vrati u partiju.');
       return;
     }
+    evalReqSeqRef.current += 1;
+    stockfishService.cancelPending();
+    setIsEvaluating(false);
     setAcademyView('puzzle');
     setAcademyPuzzleId(id);
     setAcademyFeedback('idle');
@@ -581,10 +711,22 @@ export default function App() {
 
   const handleCloseAcademy = () => {
     if (academyView === 'puzzle') {
-      const win = window as Window & { wizardChess?: { exitAcademy?: () => boolean } };
+      const win = window as Window & {
+        wizardChess?: { exitAcademy?: () => boolean; getFen?: () => string };
+      };
       if (!win.wizardChess?.exitAcademy?.()) {
         setAcademyError('Partija nije mogla automatski da se vrati. Osveži stranicu samo ako je tabla ostala zaglavljena.');
         return;
+      }
+      const restoredFen = win.wizardChess?.getFen?.();
+      if (restoredFen && !isOnlineModeRef.current) {
+        const evalSeq = ++evalReqSeqRef.current;
+        void stockfishService.evaluatePosition(restoredFen, 120).then((evalRes) => {
+          if (evalSeq === evalReqSeqRef.current && evalRes) {
+            evalBeforeRef.current = evalRes;
+            setEvalState(evalRes);
+          }
+        });
       }
     }
     setAcademyVisible(false);
@@ -592,10 +734,22 @@ export default function App() {
   };
 
   const handleLeavePuzzle = () => {
-    const win = window as Window & { wizardChess?: { exitAcademy?: () => boolean } };
+    const win = window as Window & {
+      wizardChess?: { exitAcademy?: () => boolean; getFen?: () => string };
+    };
     if (!win.wizardChess?.exitAcademy?.()) {
       setAcademyError('Partija nije mogla automatski da se vrati. Pokušaj ponovo ili izađi iz Akademije.');
       return;
+    }
+    const restoredFen = win.wizardChess?.getFen?.();
+    if (restoredFen && !isOnlineModeRef.current) {
+      const evalSeq = ++evalReqSeqRef.current;
+      void stockfishService.evaluatePosition(restoredFen, 120).then((evalRes) => {
+        if (evalSeq === evalReqSeqRef.current && evalRes) {
+          evalBeforeRef.current = evalRes;
+          setEvalState(evalRes);
+        }
+      });
     }
     setAcademyView('home');
     setAcademyPuzzleId(null);
@@ -677,6 +831,10 @@ export default function App() {
       wizardChess?: { exitOnlineMode?: () => boolean };
     };
     win.wizardChess?.exitOnlineMode?.();
+    evalBeforeRef.current = { whiteCp: 0, mateIn: null };
+    setEvalState({ whiteCp: 0, mateIn: null });
+    setPlayerColor('w');
+    setAiVoiceCue(undefined);
     applySceneTheme(selectedPersonaRef.current);
   };
 
@@ -692,25 +850,60 @@ export default function App() {
   };
 
   const handleRequestHint = async () => {
+    if (isOnlineModeRef.current || academyVisibleRef.current) return;
     progressionService.awardHint();
     const reqId = ++aiRequestSeqRef.current;
     setIsLoadingAI(true);
     try {
       const win = window as unknown as {
         wizardChess?: {
+          getBoardState?: () => ({ type: string; color: 'w' | 'b' } | null)[][];
+          getFen?: () => string;
+          showHintHighlight?: (fromR: number, fromC: number, toR: number, toC: number) => void;
           getGameContext?: () => {
             currentTurn: 'w' | 'b';
+            fen?: string;
             legalMovesSummary?: string[];
           };
         };
       };
       const ctx = win.wizardChess?.getGameContext?.();
+      const fen = ctx?.fen || win.wizardChess?.getFen?.() || '';
+      let stockfishHint: StockfishHintContext | null = null;
+
+      if (fen) {
+        const hintRes = await stockfishService.getHintMove(fen, 240);
+        if (reqId !== aiRequestSeqRef.current) return;
+        if (hintRes) {
+          win.wizardChess?.showHintHighlight?.(
+            hintRes.move.fromR,
+            hintRes.move.fromC,
+            hintRes.move.toR,
+            hintRes.move.toC
+          );
+          const boardSnapshot = win.wizardChess?.getBoardState?.();
+          const movingPiece = boardSnapshot?.[hintRes.move.fromR]?.[hintRes.move.fromC];
+          const evalDisplay = evalToDisplay(hintRes.evalState);
+          setEvalState(hintRes.evalState);
+          evalBeforeRef.current = hintRes.evalState;
+          stockfishHint = {
+            fromSquare: hintRes.move.fromSquare,
+            toSquare: hintRes.move.toSquare,
+            pieceType: movingPiece?.type,
+            promotion: hintRes.move.promotion,
+            evalLabel: evalDisplay.label,
+          };
+        }
+      }
+
       const hint = await geminiService.getHint(
         selectedPersonaRef.current,
         ctx?.currentTurn || 'w',
-        ctx?.legalMovesSummary
+        ctx?.legalMovesSummary,
+        stockfishHint
       );
       if (reqId === aiRequestSeqRef.current) {
+        setAiVoiceCue('hint');
         setAiMessage(hint);
       }
     } catch (err) {
@@ -734,11 +927,23 @@ export default function App() {
 
       <div id="canvas-container"></div>
 
+      {/* Live Stockfish Evaluation Bar in 3D view (hidden in online PvP, Academy, and 2D modal) */}
+      {!isOnlineMode && !academyVisible && !is2DMode && (
+        <EvalBar
+          variant="hud"
+          evalState={evalState}
+          flipped={playerColor === 'b'}
+          isEvaluating={isEvaluating}
+        />
+      )}
+
       {/* Floating AI Dialogue Speech Bubble with Voice Synthesis */}
       <AIBubble
         personaId={selectedPersona}
         message={aiMessage}
+        voiceCue={aiVoiceCue}
         isLoading={isLoadingAI}
+        hintDisabled={isOnlineMode}
         onRequestHint={handleRequestHint}
       />
 
@@ -1049,6 +1254,11 @@ export default function App() {
       <Classic2DBoard
         isOpen={is2DMode}
         isOnlineMode={isOnlineMode}
+        evalState={evalState}
+        isEvaluating={isEvaluating}
+        hintMessage={aiMessage}
+        isLoadingHint={isLoadingAI}
+        onRequestHint={handleRequestHint}
         onClose={() => setIs2DMode(false)}
         onUndoMove={handleUndoMove}
         onRequestPromotion={setPendingPromotion}

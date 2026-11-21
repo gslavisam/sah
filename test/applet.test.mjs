@@ -526,12 +526,146 @@ test('2D board orientation renders White at bottom by default and rotates 180 de
   assert.deepEqual(blackFlipped, whiteNormal);
 });
 
-test('Gemini server proxy uses active gemini-4-hydrogen model and required User-Agent header', () => {
+test('Gemini server proxy uses active low-latency model, User-Agent header, and request timeouts', () => {
   const serverSrc = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf-8');
+  const geminiSrc = fs.readFileSync(path.join(ROOT, 'src/services/geminiService.ts'), 'utf-8');
   assert.ok(!serverSrc.includes('gemini-2.5-flash'), 'Deprecated gemini-2.5-flash model must not be used');
-  assert.ok(serverSrc.includes("model: 'gemini-4-hydrogen'"), 'Server must use active gemini-4-hydrogen model');
+  assert.ok(serverSrc.includes("model: 'gemini-3.1-flash-lite'"), 'Server must use active low-latency gemini-3.1-flash-lite model');
+  assert.ok(serverSrc.includes('ThinkingLevel.MINIMAL'), 'Server must configure minimal thinking latency for short commentary');
+  assert.ok(serverSrc.includes('abortSignal: AbortSignal.timeout'), 'Server Gemini request must have an abort timeout');
   assert.ok(serverSrc.includes("'User-Agent': 'aistudio-build'"), 'GoogleGenAI client must set User-Agent header');
+  assert.ok(geminiSrc.includes('new AbortController()'), 'Client proxy must abort stalled requests so AI bubble never spins forever');
 });
+
+test('Stockfish 19 Lite WASM static assets exist and are non-empty', () => {
+  const workerJs = path.join(ROOT, 'public/stockfish/stockfish-19-lite-single.js');
+  const wasmBin = path.join(ROOT, 'public/stockfish/stockfish-19-lite-single.wasm');
+  assert.ok(fs.existsSync(workerJs), 'Missing Stockfish single-threaded worker JS');
+  assert.ok(fs.existsSync(wasmBin), 'Missing Stockfish single-threaded WASM binary');
+  assert.ok(fs.statSync(workerJs).size > 5000, 'Stockfish worker JS is unexpectedly small');
+  assert.ok(fs.statSync(wasmBin).size > 500000, 'Stockfish WASM binary is unexpectedly small');
+});
+
+test('Stockfish FEN serialization, UCI move parsing, ELO profiles, eval display, and blunder classification work', async () => {
+  const {
+    createInitialChessState,
+    applyChessMove,
+    coordsToSquare,
+    squareToCoords,
+    parseUciMove,
+    boardToFen,
+    getStockfishEloProfile,
+    normalizeScoreToWhite,
+    evalToDisplay,
+    classifyPlayerMoveQuality,
+  } = await import('../src/shared/chessRules.ts');
+
+  assert.equal(coordsToSquare(6, 4), 'e2');
+  assert.deepEqual(squareToCoords('e2'), { r: 6, c: 4 });
+  assert.equal(coordsToSquare(0, 7), 'h8');
+
+  const parsedPromo = parseUciMove('e7e8q');
+  assert.deepEqual(parsedPromo, {
+    uci: 'e7e8q',
+    fromR: 1,
+    fromC: 4,
+    toR: 0,
+    toC: 4,
+    fromSquare: 'e7',
+    toSquare: 'e8',
+    promotion: 'queen',
+  });
+  assert.equal(parseUciMove('(none)'), null);
+
+  let state = createInitialChessState();
+  assert.equal(
+    boardToFen(state.board, {
+      currentTurn: state.currentTurn,
+      enPassantTarget: state.enPassantTarget,
+      halfMoveClock: 0,
+      moveCount: 0,
+    }),
+    'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+  );
+
+  // 1. e4 -> en passant target e3, black to move
+  state = applyChessMove(state, 6, 4, 4, 4).state;
+  assert.equal(
+    boardToFen(state.board, {
+      currentTurn: state.currentTurn,
+      enPassantTarget: state.enPassantTarget,
+      halfMoveClock: 0,
+      moveCount: 1,
+    }),
+    'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1'
+  );
+
+  // Persona + difficulty ELO scaling
+  const mentorEasy = getStockfishEloProfile('mentor', 'easy');
+  const roastMed = getStockfishEloProfile('roast', 'medium');
+  const rivalHard = getStockfishEloProfile('rival', 'hard');
+  assert.ok(mentorEasy.uciElo < roastMed.uciElo && roastMed.uciElo < rivalHard.uciElo);
+
+  // Score normalization (Black +180 => White -180)
+  const normBlackLead = normalizeScoreToWhite('cp', 180, 'b');
+  assert.equal(normBlackLead.whiteCp, -180);
+  assert.equal(normBlackLead.mateIn, null);
+  const disp = evalToDisplay(normBlackLead);
+  assert.equal(disp.label, '-1.8');
+  assert.ok(disp.whitePercent < 50);
+
+  // Blunder threshold (>= 200 cp drop from player's POV)
+  const blunderRes = classifyPlayerMoveQuality(
+    { whiteCp: 40, mateIn: null },
+    { whiteCp: -210, mateIn: null },
+    'w'
+  );
+  assert.equal(blunderRes.quality, 'blunder');
+  assert.equal(blunderRes.cpLoss, 250);
+
+  const blackGoodRes = classifyPlayerMoveQuality(
+    { whiteCp: 60, mateIn: null },
+    { whiteCp: 40, mateIn: null },
+    'b'
+  );
+  assert.equal(blackGoodRes.quality, 'good');
+  assert.equal(blackGoodRes.cpLoss, 0);
+});
+
+test('Stockfish WASM worker, blunder MP3 cue, hint highlights, and EvalBar fair-play guards are wired', () => {
+  const sfService = fs.readFileSync(path.join(ROOT, 'src/services/stockfishService.ts'), 'utf-8');
+  const voiceSrc = fs.readFileSync(path.join(ROOT, 'src/services/voiceService.ts'), 'utf-8');
+  const geminiSrc = fs.readFileSync(path.join(ROOT, 'src/services/geminiService.ts'), 'utf-8');
+  const evalBarSrc = fs.readFileSync(path.join(ROOT, 'src/components/EvalBar.tsx'), 'utf-8');
+  const board2dSrc = fs.readFileSync(path.join(ROOT, 'src/components/Classic2DBoard.tsx'), 'utf-8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+
+  assert.ok(sfService.includes('/stockfish/stockfish-19-lite-single.js'));
+  assert.ok(sfService.includes('UCI_LimitStrength'));
+  assert.ok(sfService.includes('navigator.webdriver'));
+
+  assert.ok(voiceSrc.includes('export type VoiceCue'));
+  assert.ok(voiceSrc.includes('blunder_0.mp3') && voiceSrc.includes('blunder_1.mp3'));
+  assert.ok(voiceSrc.includes('this.pickCueClip(personaId, voiceCue)'));
+
+  assert.ok(geminiSrc.includes("detail.moveQuality === 'blunder'"));
+  assert.ok(geminiSrc.includes('stockfishHint?: StockfishHintContext | null'));
+
+  assert.ok(evalBarSrc.includes('transform: `scaleY(${scale})`'));
+  assert.ok(board2dSrc.includes('<EvalBar'));
+  assert.ok(board2dSrc.includes('square-hint-from'));
+  assert.ok(board2dSrc.includes('chess-2d-btn-hint'));
+
+  assert.ok(engineSrc.includes('stockfishService') && engineSrc.includes('chooseBotMove'));
+  assert.ok(engineSrc.includes('function showHintHighlight(') && engineSrc.includes("new CustomEvent('wizardchess:hint'"));
+
+  assert.ok(appTsx.includes('{!isOnlineMode && !academyVisible && !is2DMode && ('));
+  assert.ok(appTsx.includes('classifyPlayerMoveQuality('));
+  assert.ok(appTsx.includes("voiceCue = 'blunder'"));
+  assert.ok(appTsx.includes('stockfishService.getHintMove('));
+});
+
 
 
 

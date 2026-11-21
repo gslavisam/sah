@@ -445,34 +445,16 @@ async function startServer() {
     }
 
     try {
-      let response = null;
-      let lastErr: unknown = null;
-      const delaysMs = [0, 400, 900];
-      for (let attempt = 0; attempt < delaysMs.length; attempt++) {
-        if (delaysMs[attempt] > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
-        }
-        try {
-          response = await client.models.generateContent({
-            model: 'gemini-4-hydrogen',
-            contents: prompt,
-            config: {
-              thinkingConfig: {
-                thinkingLevel: ThinkingLevel.LOW,
-              },
-            },
-          });
-          break;
-        } catch (err: unknown) {
-          lastErr = err;
-          const status = (err as { status?: number })?.status;
-          const retryable = status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
-          if (!retryable || attempt === delaysMs.length - 1) {
-            throw err;
-          }
-        }
-      }
-      if (!response && lastErr) throw lastErr;
+      const response = await client.models.generateContent({
+        model: 'gemini-3.1-flash-lite',
+        contents: prompt,
+        config: {
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.MINIMAL,
+          },
+          abortSignal: AbortSignal.timeout(4500),
+        },
+      });
       res.json({ text: response?.text?.trim() || null, configured: true });
     } catch (err: unknown) {
       console.warn('Gemini server generateContent error:', err);

@@ -1,18 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { PERSONAS, PersonaId } from '../services/geminiService';
-import { voiceService } from '../services/voiceService';
+import { voiceService, type VoiceCue } from '../services/voiceService';
 
 interface Props {
   personaId: PersonaId;
   message: string;
+  voiceCue?: VoiceCue;
   isLoading: boolean;
+  hintDisabled?: boolean;
   onRequestHint: () => void;
 }
 
 export const AIBubble: React.FC<Props> = ({
   personaId,
   message,
+  voiceCue,
   isLoading,
+  hintDisabled = false,
   onRequestHint,
 }) => {
   const [minimized, setMinimized] = useState(false);
@@ -23,15 +27,15 @@ export const AIBubble: React.FC<Props> = ({
     const newState = voiceService.toggleVoice();
     setVoiceActive(newState);
     if (newState) {
-      voiceService.speak(message, personaId);
+      voiceService.speak(message, personaId, voiceCue);
     }
   };
 
   useEffect(() => {
     if (message && !isLoading && voiceActive) {
-      voiceService.speak(message, personaId);
+      voiceService.speak(message, personaId, voiceCue);
     }
-  }, [message, isLoading, personaId, voiceActive]);
+  }, [message, voiceCue, isLoading, personaId, voiceActive]);
 
   if (minimized) {
     return (
@@ -66,8 +70,8 @@ export const AIBubble: React.FC<Props> = ({
             type="button"
             className="ai-action-btn hint-btn"
             onClick={onRequestHint}
-            disabled={isLoading}
-            title="Zatraži jednostavan savet za početnike"
+            disabled={isLoading || hintDisabled}
+            title={hintDisabled ? 'Savet nije dostupan tokom online duela' : 'Zatraži Stockfish savet za sledeći potez'}
           >
             💡 Savet
           </button>
