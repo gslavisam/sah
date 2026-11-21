@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Chess2DPiece, PieceType, PieceColor } from './Chess2DPiece';
+import { get2DBoardOrientation } from '../shared/chessRules';
 
 export interface PromotionRequest {
   fromR: number;
@@ -133,6 +134,7 @@ export const Classic2DBoard: React.FC<Props> = ({
     const win = window as unknown as {
       wizardChess?: { toggleSide?: () => boolean };
     };
+    setFlipped(false);
     win.wizardChess?.toggleSide?.();
   };
 
@@ -219,9 +221,7 @@ export const Classic2DBoard: React.FC<Props> = ({
         ? '🤝 REMI! Pravilo 50 poteza'
         : '🤝 PAT! Partija je završena remijem';
 
-  const isViewFlipped = flipped ? playerColor === 'w' : playerColor === 'b';
-  const rowIndices = isViewFlipped ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0];
-  const colIndices = isViewFlipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
+  const { rowIndices, colIndices } = get2DBoardOrientation(playerColor, flipped);
   const fileLetters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
   return (
@@ -280,6 +280,7 @@ export const Classic2DBoard: React.FC<Props> = ({
               type="button"
               className="chess-2d-btn"
               onClick={() => setFlipped((prev) => !prev)}
+              aria-pressed={flipped}
               title="Okreni tablu"
             >
               ⮀ Okreni

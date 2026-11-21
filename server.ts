@@ -3,7 +3,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import http from 'http';
 import path from 'path';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   applyChessMove,
@@ -227,7 +227,14 @@ function getGeminiClient(): GoogleGenAI | null {
   const apiKey = (process.env.GEMINI_API_KEY || process.env.API_KEY || '').trim();
   if (!apiKey) return null;
   try {
-    return new GoogleGenAI({ apiKey });
+    return new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
   } catch (err) {
     console.warn('Gemini server client init error:', err);
     return null;
@@ -438,14 +445,39 @@ async function startServer() {
     }
 
     try {
-      const response = await client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-      });
-      res.json({ text: response.text?.trim() || null, configured: true });
-    } catch (err) {
+      let response = null;
+      let lastErr: unknown = null;
+      const delaysMs = [0, 400, 900];
+      for (let attempt = 0; attempt < delaysMs.length; attempt++) {
+        if (delaysMs[attempt] > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+        }
+        try {
+          response = await client.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: prompt,
+            config: {
+              thinkingConfig: {
+                thinkingLevel: ThinkingLevel.LOW,
+              },
+            },
+          });
+          break;
+        } catch (err: unknown) {
+          lastErr = err;
+          const status = (err as { status?: number })?.status;
+          const retryable = status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
+          if (!retryable || attempt === delaysMs.length - 1) {
+            throw err;
+          }
+        }
+      }
+      if (!response && lastErr) throw lastErr;
+      res.json({ text: response?.text?.trim() || null, configured: true });
+    } catch (err: unknown) {
       console.warn('Gemini server generateContent error:', err);
-      res.status(502).json({ text: null, configured: true, error: 'Gemini request failed' });
+      const message = err instanceof Error ? err.message : 'Gemini request failed';
+      res.status(502).json({ text: null, configured: true, error: message });
     }
   });
 
