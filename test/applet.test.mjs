@@ -793,6 +793,14 @@ test('Central Park Zen mode builds procedural outdoor plaza, swaps stone board, 
   assert.ok(appTsx.includes("zenMode={ambience === 'park'}"));
 });
 
+test('.gitignore anchors root /data/ so src/data/chessAcademyLessons.ts is included in builds', () => {
+  const gitignore = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf-8');
+  const lines = gitignore.split(/\r?\n/).map((line) => line.trim());
+  assert.ok(!lines.includes('data/'), '.gitignore must not use unanchored data/ which ignores src/data/');
+  assert.ok(lines.includes('/data/'), '.gitignore should anchor /data/ to root SQLite directory');
+  assert.ok(fs.existsSync(path.join(ROOT, 'src/data/chessAcademyLessons.ts')), 'src/data/chessAcademyLessons.ts must exist');
+});
+
 
 
 
