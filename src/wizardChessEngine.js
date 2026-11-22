@@ -1770,6 +1770,8 @@ export function initWizardChess() {
     let academyMode = false;
     let academyTutorialMode = false;
     let academySavedState = null;
+    let gameStartingFen = DEFAULT_START_FEN;
+    let matchResultOverride = null;
 
     // Camera Animation & Telemetry State
     const cameraTelemetry = {
@@ -2974,6 +2976,8 @@ export function initWizardChess() {
       academySavedState = {
         board: captureBoardSnapshot(),
         moveHistory: moveHistory.slice(),
+        startingFen: gameStartingFen,
+        matchResultOverride,
         gameMode,
         playerColor,
         aiAutoPlay
@@ -2997,6 +3001,8 @@ export function initWizardChess() {
         academySavedState = {
           board: captureBoardSnapshot(),
           moveHistory: moveHistory.slice(),
+          startingFen: gameStartingFen,
+          matchResultOverride,
           gameMode,
           playerColor,
           aiAutoPlay
@@ -3033,6 +3039,8 @@ export function initWizardChess() {
     function takeOverAcademyGame(preferredPlayerColor = 'w') {
       if (!academyMode) return false;
       completeCurrentMoveImmediately();
+      gameStartingFen = getFen();
+      matchResultOverride = null;
       academySavedState = null;
       academyMode = false;
       academyTutorialMode = false;
@@ -3073,6 +3081,8 @@ export function initWizardChess() {
         return false;
       }
       moveHistory = saved.moveHistory;
+      gameStartingFen = saved.startingFen || DEFAULT_START_FEN;
+      matchResultOverride = saved.matchResultOverride || null;
       playerCamSide = playerColor;
       primaryCameraView = 'player';
       setActiveCamButton('btn-camera-view');
@@ -3145,6 +3155,8 @@ export function initWizardChess() {
       gameOver = true;
       const reason = outcome?.reason || null;
       const winner = outcome?.winner || null;
+      matchResultOverride =
+        winner === 'w' ? '1-0' : winner === 'b' ? '0-1' : '1/2-1/2';
 
       if (reason === 'stalemate' || reason === 'repetition' || reason === 'fifty-move') {
         drawReason = reason;
@@ -3240,6 +3252,15 @@ export function initWizardChess() {
       capturedByBlack = Math.max(0, 16 - whiteCount);
 
       const mvCount = Math.max(0, Number(chess.moveCount) || 0);
+      gameStartingFen = mvCount === 0 ? DEFAULT_START_FEN : getFen();
+      matchResultOverride =
+        roomState.status === 'ended' && roomState.outcome
+          ? roomState.outcome.winner === 'w'
+            ? '1-0'
+            : roomState.outcome.winner === 'b'
+              ? '0-1'
+              : '1/2-1/2'
+          : null;
       moveHistory = Array.from({ length: mvCount }, (_, idx) => ({
         snapshot: null,
         move: idx === mvCount - 1 && chess.lastMove ? chess.lastMove : null
@@ -3341,6 +3362,8 @@ export function initWizardChess() {
       capturedByWhite = 0;
       capturedByBlack = 0;
       moveHistory = [];
+      gameStartingFen = DEFAULT_START_FEN;
+      matchResultOverride = null;
 
       const backRow = ['rook', 'knight', 'bishop', 'queen', 'king', 'bishop', 'knight', 'rook'];
       for (let c = 0; c < 8; c++) {
@@ -3795,6 +3818,53 @@ export function initWizardChess() {
         halfMoveClock,
         moveCount: moveHistory.length,
       });
+    }
+
+    function getMoveHistory() {
+      const fileChars = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+      const toSq = (r, c) => `${fileChars[c]}${8 - r}`;
+      let hasIncompleteHistory = false;
+      const moves = [];
+      for (const entry of moveHistory) {
+        const m = entry?.move;
+        if (
+          !m ||
+          !Number.isInteger(m.fromR) ||
+          !Number.isInteger(m.fromC) ||
+          !Number.isInteger(m.toR) ||
+          !Number.isInteger(m.toC)
+        ) {
+          hasIncompleteHistory = true;
+          continue;
+        }
+        moves.push({
+          from: toSq(m.fromR, m.fromC),
+          to: toSq(m.toR, m.toC),
+          promotion: m.promotion || undefined,
+        });
+      }
+      let result = matchResultOverride || '*';
+      if (result === '*' && gameOver) {
+        if (drawReason) {
+          result = '1/2-1/2';
+        } else if (checkmateState?.winnerColor === 'w') {
+          result = '1-0';
+        } else if (checkmateState?.winnerColor === 'b') {
+          result = '0-1';
+        } else if (isKingInCheck(currentTurn, boardState)) {
+          result = currentTurn === 'w' ? '0-1' : '1-0';
+        }
+      }
+      return {
+        startingFen: gameStartingFen,
+        currentFen: getFen(),
+        hasIncompleteHistory,
+        moves,
+        moveCount: moveHistory.length,
+        result,
+        playerColor,
+        gameMode,
+      };
     }
 
     // =========================================================================
@@ -5886,6 +5956,7 @@ export function initWizardChess() {
       isKingInCheck: (color) => isKingInCheck(color || currentTurn, boardState),
       isGameOver: () => gameOver,
       getFen,
+      getMoveHistory,
       showHintHighlight,
       clearHintHighlight,
       getAIDifficulty: () => aiDifficulty,

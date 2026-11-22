@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { ACADEMY_AREAS, LESSONS_BY_AREA, type AcademyAreaId } from '../services/academyCatalog';
 import { academyProgression } from '../services/academyProgression';
 import { soundService } from '../services/soundService';
@@ -6,8 +6,52 @@ import { PUZZLES } from '../services/puzzleCatalog';
 import {
   ACADEMY_TUTORIAL_CATEGORIES,
   CHESS_ACADEMY_LESSONS,
-  type AcademyCategory
+  type AcademyCategory,
+  type ChessAcademyLesson
 } from '../data/chessAcademyLessons';
+import { reconstructLessonFen } from '../services/pgnService';
+import {
+  fetchLichessMasterGamePgn,
+  fetchLichessMasterStats,
+  getCachedLichessMasterStats,
+  type LichessMasterStats
+} from '../services/lichessExplorerService';
+import {
+  fetchChessComUserGames,
+  fetchLichessUserGames,
+  fetchPgnFromOnlineUrl,
+  type RemoteChessGameSummary
+} from '../services/onlineChessImportService';
+
+type ImportSourceTab = 'masters' | 'online' | 'file';
+
+const MASTERS_POSITION_PRESETS: { id: string; label: string; fen: string }[] = [
+  {
+    id: 'start',
+    label: 'Početna pozicija',
+    fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+  },
+  {
+    id: 'italian',
+    label: 'Italijanska partija (C50)',
+    fen: 'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3'
+  },
+  {
+    id: 'spanish',
+    label: 'Španska partija (C60)',
+    fen: 'r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3'
+  },
+  {
+    id: 'sicilian',
+    label: 'Sicilijanska odbrana (B20)',
+    fen: 'rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2'
+  },
+  {
+    id: 'queens-gambit',
+    label: 'Damin gambit (D06)',
+    fen: 'rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR b KQkq - 0 2'
+  }
+];
 
 type AcademyProps = {
   view: 'home' | 'puzzle' | 'tutorial';
@@ -18,6 +62,7 @@ type AcademyProps = {
   tutorialStepIndex: number;
   tutorialAnimating: boolean;
   tutorialGameOver: boolean;
+  customLessons: ChessAcademyLesson[];
   error: string | null;
   onClose: () => void;
   onOpenPuzzle: (id: string) => void;
@@ -32,6 +77,8 @@ type AcademyProps = {
   onResetTutorialLesson: () => void;
   onTakeOverTutorial: () => void;
   onLeaveTutorial: () => void;
+  onImportPgn: (pgnText: string) => { ok: boolean; error?: string };
+  onDeleteCustomLesson: (lessonId: string) => void;
 };
 
 type AreaId = AcademyAreaId | 'puzzles';
@@ -45,6 +92,7 @@ export function Academy({
   tutorialStepIndex,
   tutorialAnimating,
   tutorialGameOver,
+  customLessons,
   error,
   onClose,
   onOpenPuzzle,
@@ -58,15 +106,42 @@ export function Academy({
   onPlayTutorialStep,
   onResetTutorialLesson,
   onTakeOverTutorial,
-  onLeaveTutorial
+  onLeaveTutorial,
+  onImportPgn,
+  onDeleteCustomLesson
 }: AcademyProps) {
   const [selectedArea, setSelectedArea] = useState<AreaId | null>(null);
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [answerSubmitted, setAnswerSubmitted] = useState(false);
   const [, setProgressVersion] = useState(0);
+  const [importerOpen, setImporterOpen] = useState(false);
+  const [importTab, setImportTab] = useState<ImportSourceTab>('masters');
+  const [pgnDraft, setPgnDraft] = useState('');
+  const [importError, setImportError] = useState<string | null>(null);
+  const [loadingGameId, setLoadingGameId] = useState<string | null>(null);
+  const [mastersPresetId, setMastersPresetId] = useState<string>('start');
+  const [importerMastersStats, setImporterMastersStats] = useState<LichessMasterStats>({
+    status: 'idle',
+    totalGames: 0,
+    topMoves: [],
+    topGames: []
+  });
+  const [onlineUrlInput, setOnlineUrlInput] = useState('');
+  const [onlinePlatform, setOnlinePlatform] = useState<'lichess' | 'chesscom'>('lichess');
+  const [onlineUsername, setOnlineUsername] = useState('');
+  const [onlineSearchLoading, setOnlineSearchLoading] = useState(false);
+  const [onlineGames, setOnlineGames] = useState<RemoteChessGameSummary[]>([]);
+  const [lichessStats, setLichessStats] = useState<LichessMasterStats>({
+    status: 'idle',
+    totalGames: 0,
+    topMoves: [],
+    topGames: []
+  });
   const puzzle = PUZZLES.find((item) => item.id === puzzleId);
   const panelRef = useRef<HTMLElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const onlineFetchAbortRef = useRef<AbortController | null>(null);
   const selectedLesson = selectedArea && selectedArea !== 'puzzles' && selectedLessonId
     ? LESSONS_BY_AREA[selectedArea].find((lesson) => lesson.id === selectedLessonId)
     : undefined;
@@ -75,10 +150,11 @@ export function Academy({
   const completedLessons = selectedArea ? academyProgression.getCompleted(selectedArea) : [];
   const completedTutorials = academyProgression.getCompletedTutorials();
 
+  const allTutorialLessons = [...customLessons, ...CHESS_ACADEMY_LESSONS];
   const activeTutorialLesson =
-    CHESS_ACADEMY_LESSONS.find((lesson) => lesson.id === tutorialLessonId) || CHESS_ACADEMY_LESSONS[0];
+    allTutorialLessons.find((lesson) => lesson.id === tutorialLessonId) || allTutorialLessons[0];
   const activeTutorialCategory = activeTutorialLesson.category;
-  const lessonsInTutorialCategory = CHESS_ACADEMY_LESSONS.filter(
+  const lessonsInTutorialCategory = allTutorialLessons.filter(
     (lesson) => lesson.category === activeTutorialCategory
   );
   const activeTutorialIndexInCategory = lessonsInTutorialCategory.findIndex(
@@ -100,6 +176,74 @@ export function Academy({
       setProgressVersion((version) => version + 1);
     });
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (view !== 'tutorial') return;
+    const fen = reconstructLessonFen(activeTutorialLesson, tutorialStepIndex);
+    const cached = getCachedLichessMasterStats(fen);
+    if (cached) {
+      setLichessStats(cached);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLichessStats({ status: 'loading', totalGames: 0, topMoves: [], topGames: [] });
+    const timer = window.setTimeout(() => {
+      void fetchLichessMasterStats(fen, { signal: controller.signal })
+        .then((res) => {
+          if (!controller.signal.aborted) {
+            setLichessStats(res);
+          }
+        })
+        .catch((err) => {
+          if ((err as { name?: string })?.name !== 'AbortError' && !controller.signal.aborted) {
+            setLichessStats({ status: 'offline', totalGames: 0, topMoves: [], topGames: [] });
+          }
+        });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [view, activeTutorialLesson, tutorialStepIndex]);
+
+  useEffect(() => {
+    if (!importerOpen || importTab !== 'masters') return;
+    const targetFen =
+      mastersPresetId === 'current' && view === 'tutorial'
+        ? reconstructLessonFen(activeTutorialLesson, tutorialStepIndex)
+        : MASTERS_POSITION_PRESETS.find((p) => p.id === mastersPresetId)?.fen ||
+          MASTERS_POSITION_PRESETS[0].fen;
+
+    const cached = getCachedLichessMasterStats(targetFen);
+    if (cached) {
+      setImporterMastersStats(cached);
+      return;
+    }
+
+    const controller = new AbortController();
+    setImporterMastersStats({ status: 'loading', totalGames: 0, topMoves: [], topGames: [] });
+    void fetchLichessMasterStats(targetFen, { signal: controller.signal })
+      .then((res) => {
+        if (!controller.signal.aborted) {
+          setImporterMastersStats(res);
+        }
+      })
+      .catch((err) => {
+        if ((err as { name?: string })?.name !== 'AbortError' && !controller.signal.aborted) {
+          setImporterMastersStats({ status: 'offline', totalGames: 0, topMoves: [], topGames: [] });
+        }
+      });
+
+    return () => controller.abort();
+  }, [importerOpen, importTab, mastersPresetId, view, activeTutorialLesson, tutorialStepIndex]);
+
+  useEffect(() => {
+    return () => {
+      onlineFetchAbortRef.current?.abort();
+    };
   }, []);
 
   useEffect(() => {
@@ -185,6 +329,422 @@ export function Academy({
     } else {
       onClose();
     }
+  };
+
+  const handlePgnFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setPgnDraft(text);
+      setImportError(null);
+      const res = onImportPgn(text);
+      if (res.ok) {
+        setImporterOpen(false);
+        setPgnDraft('');
+      } else {
+        setImportError(res.error || 'Neispravan PGN fajl.');
+      }
+    } catch {
+      setImportError('Nije uspelo čitanje izabranog PGN fajla.');
+    }
+  };
+
+  const handleSubmitPgnImport = () => {
+    setImportError(null);
+    const res = onImportPgn(pgnDraft);
+    if (res.ok) {
+      setImporterOpen(false);
+      setPgnDraft('');
+    } else {
+      setImportError(res.error || 'Neispravan PGN zapis.');
+    }
+  };
+
+  const handleLoadMasterGame = async (gameId: string) => {
+    if (loadingGameId || tutorialAnimating) return;
+    onlineFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    onlineFetchAbortRef.current = controller;
+    setLoadingGameId(gameId);
+    setImportError(null);
+    try {
+      const pgn = await fetchLichessMasterGamePgn(gameId, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      const res = onImportPgn(pgn);
+      if (res.ok) {
+        setImporterOpen(false);
+      } else {
+        setImportError(res.error || 'Master partija nije mogla da se učita.');
+      }
+    } catch (err) {
+      if ((err as { name?: string })?.name !== 'AbortError') {
+        setImportError(
+          err instanceof Error ? err.message : 'Preuzimanje master partije nije uspelo.'
+        );
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setLoadingGameId(null);
+      }
+    }
+  };
+
+  const handleFetchFromOnlineUrl = async () => {
+    if (onlineSearchLoading || loadingGameId) return;
+    onlineFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    onlineFetchAbortRef.current = controller;
+    setOnlineSearchLoading(true);
+    setImportError(null);
+    try {
+      const pgn = await fetchPgnFromOnlineUrl(onlineUrlInput, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      const res = onImportPgn(pgn);
+      if (res.ok) {
+        setImporterOpen(false);
+        setOnlineUrlInput('');
+      } else {
+        setImportError(res.error || 'Preuzeti PGN nije mogao da se učita.');
+      }
+    } catch (err) {
+      if ((err as { name?: string })?.name !== 'AbortError') {
+        setImportError(
+          err instanceof Error ? err.message : 'Nije uspelo preuzimanje partije sa linka.'
+        );
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setOnlineSearchLoading(false);
+      }
+    }
+  };
+
+  const handleSearchOnlinePlayerGames = async () => {
+    if (onlineSearchLoading || loadingGameId) return;
+    onlineFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    onlineFetchAbortRef.current = controller;
+    setOnlineSearchLoading(true);
+    setImportError(null);
+    setOnlineGames([]);
+    try {
+      const results =
+        onlinePlatform === 'lichess'
+          ? await fetchLichessUserGames(onlineUsername, { max: 8, signal: controller.signal })
+          : await fetchChessComUserGames(onlineUsername, { max: 8, signal: controller.signal });
+      if (!controller.signal.aborted) {
+        setOnlineGames(results);
+      }
+    } catch (err) {
+      if ((err as { name?: string })?.name !== 'AbortError') {
+        setImportError(
+          err instanceof Error ? err.message : 'Pretraga partija korisnika nije uspela.'
+        );
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setOnlineSearchLoading(false);
+      }
+    }
+  };
+
+  const handleLoadRemoteSummary = (game: RemoteChessGameSummary) => {
+    setImportError(null);
+    const res = onImportPgn(game.pgn);
+    if (res.ok) {
+      setImporterOpen(false);
+    } else {
+      setImportError(res.error || 'Partija nije mogla da se učita u 3D Tutorijal.');
+    }
+  };
+
+  const formatMasterResult = (winner?: 'white' | 'black' | null) =>
+    winner === 'white' ? '1-0' : winner === 'black' ? '0-1' : '½-½';
+
+  const renderPgnImporterBox = () => {
+    if (!importerOpen) return null;
+    return (
+      <div id="academy-pgn-importer" className="academy-pgn-importer">
+        <div className="academy-pgn-importer-top">
+          <strong>Uvoz partije u 3D Tutorijal</strong>
+          <button
+            type="button"
+            className="academy-pgn-close-inline"
+            onClick={() => {
+              setImporterOpen(false);
+              setImportError(null);
+            }}
+          >
+            Zatvori
+          </button>
+        </div>
+
+        <div className="academy-importer-tabs" role="tablist" aria-label="Izvor uvoza partije">
+          <button
+            type="button"
+            role="tab"
+            id="tab-import-masters"
+            aria-selected={importTab === 'masters'}
+            className={`academy-importer-tab ${importTab === 'masters' ? 'active' : ''}`}
+            onClick={() => {
+              setImportError(null);
+              setImportTab('masters');
+            }}
+          >
+            Lichess Masters
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="tab-import-online"
+            aria-selected={importTab === 'online'}
+            className={`academy-importer-tab ${importTab === 'online' ? 'active' : ''}`}
+            onClick={() => {
+              setImportError(null);
+              setImportTab('online');
+            }}
+          >
+            Lichess / Chess.com
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="tab-import-file"
+            aria-selected={importTab === 'file'}
+            className={`academy-importer-tab ${importTab === 'file' ? 'active' : ''}`}
+            onClick={() => {
+              setImportError(null);
+              setImportTab('file');
+            }}
+          >
+            Fajl / Tekst
+          </button>
+        </div>
+
+        {importTab === 'masters' ? (
+          <div className="academy-importer-pane">
+            <div className="academy-importer-field-row">
+              <label className="academy-tutorial-label" htmlFor="select-masters-preset">
+                Izaberi otvaranje iz Lichess Masters baze
+              </label>
+              <select
+                id="select-masters-preset"
+                className="academy-tutorial-select"
+                value={mastersPresetId}
+                onChange={(e) => setMastersPresetId(e.target.value)}
+              >
+                {view === 'tutorial' ? (
+                  <option value="current">Trenutna pozicija na tabli</option>
+                ) : null}
+                {MASTERS_POSITION_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {importerMastersStats.status === 'loading' ? (
+              <p className="academy-lichess-note">Preuzimanje velemajstorskih partija...</p>
+            ) : importerMastersStats.status === 'rate-limited' ? (
+              <p className="academy-lichess-note">
+                Lichess API privremeno ograničava zahteve. Pokušaj za minut.
+              </p>
+            ) : importerMastersStats.status === 'offline' ? (
+              <p className="academy-lichess-note">
+                Lichess Masters baza trenutno nije dostupna.
+              </p>
+            ) : importerMastersStats.topGames.length === 0 ? (
+              <p className="academy-lichess-note">
+                Nema pronađenih master partija za ovu poziciju.
+              </p>
+            ) : (
+              <ul className="academy-remote-games-list">
+                {importerMastersStats.topGames.map((game) => (
+                  <li key={game.id} className="academy-remote-game-row">
+                    <div className="academy-remote-game-info">
+                      <strong>
+                        {game.whiteName}
+                        {game.whiteRating ? ` (${game.whiteRating})` : ''} – {game.blackName}
+                        {game.blackRating ? ` (${game.blackRating})` : ''}
+                      </strong>
+                      <span>
+                        {[game.year ? String(game.year) : null, formatMasterResult(game.winner)]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="academy-remote-load-btn"
+                      disabled={loadingGameId !== null}
+                      onClick={() => void handleLoadMasterGame(game.id)}
+                    >
+                      {loadingGameId === game.id ? 'Učitavanje...' : 'Učitaj u 3D'}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : importTab === 'online' ? (
+          <div className="academy-importer-pane">
+            <div className="academy-importer-field-row">
+              <label className="academy-tutorial-label" htmlFor="input-online-pgn-url">
+                Direktan link ka Lichess partiji ili studiji
+              </label>
+              <div className="academy-importer-input-group">
+                <input
+                  id="input-online-pgn-url"
+                  type="text"
+                  className="academy-importer-input"
+                  value={onlineUrlInput}
+                  onChange={(e) => {
+                    setOnlineUrlInput(e.target.value);
+                    if (importError) setImportError(null);
+                  }}
+                  placeholder="https://lichess.org/30WVeXdd ili link studije"
+                />
+                <button
+                  type="button"
+                  id="btn-fetch-online-url"
+                  className="academy-primary-compact"
+                  disabled={onlineSearchLoading || loadingGameId !== null}
+                  onClick={() => void handleFetchFromOnlineUrl()}
+                >
+                  {onlineSearchLoading ? 'Preuzimanje...' : 'Preuzmi'}
+                </button>
+              </div>
+            </div>
+
+            <div className="academy-importer-field-row">
+              <label className="academy-tutorial-label" htmlFor="input-online-username">
+                Poslednje partije igrača (Lichess / Chess.com)
+              </label>
+              <div className="academy-importer-input-group">
+                <select
+                  aria-label="Izaberi šahovski sajt"
+                  className="academy-importer-platform-select"
+                  value={onlinePlatform}
+                  onChange={(e) => {
+                    setOnlinePlatform(e.target.value === 'chesscom' ? 'chesscom' : 'lichess');
+                    setOnlineGames([]);
+                    setImportError(null);
+                  }}
+                >
+                  <option value="lichess">Lichess</option>
+                  <option value="chesscom">Chess.com</option>
+                </select>
+                <input
+                  id="input-online-username"
+                  type="text"
+                  className="academy-importer-input"
+                  value={onlineUsername}
+                  onChange={(e) => {
+                    setOnlineUsername(e.target.value);
+                    if (importError) setImportError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void handleSearchOnlinePlayerGames();
+                    }
+                  }}
+                  placeholder={onlinePlatform === 'lichess' ? 'npr. DrNykterstein' : 'npr. Hikaru'}
+                />
+                <button
+                  type="button"
+                  id="btn-fetch-player-games"
+                  className="academy-secondary-button"
+                  disabled={onlineSearchLoading || loadingGameId !== null}
+                  onClick={() => void handleSearchOnlinePlayerGames()}
+                >
+                  {onlineSearchLoading ? 'Tražim...' : 'Pronađi'}
+                </button>
+              </div>
+            </div>
+
+            {onlineGames.length > 0 ? (
+              <ul className="academy-remote-games-list">
+                {onlineGames.map((game) => (
+                  <li key={game.id} className="academy-remote-game-row">
+                    <div className="academy-remote-game-info">
+                      <strong>
+                        {game.whiteName}
+                        {game.whiteRating ? ` (${game.whiteRating})` : ''} – {game.blackName}
+                        {game.blackRating ? ` (${game.blackRating})` : ''}
+                      </strong>
+                      <span>
+                        {[game.result, game.openingName, game.dateLabel]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="academy-remote-load-btn"
+                      onClick={() => handleLoadRemoteSummary(game)}
+                    >
+                      Učitaj u 3D
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : (
+          <div className="academy-importer-pane">
+            <div className="academy-pgn-importer-top">
+              <span className="academy-tutorial-label">Fajl sa diska ili nalepjeni PGN</span>
+              <button
+                type="button"
+                className="academy-pgn-file-btn"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Izaberi .pgn fajl
+              </button>
+              <input
+                ref={fileInputRef}
+                id="input-pgn-file"
+                className="academy-pgn-file-input"
+                type="file"
+                accept=".pgn,.txt"
+                onChange={handlePgnFileChange}
+              />
+            </div>
+            <textarea
+              id="textarea-pgn-input"
+              className="academy-pgn-textarea"
+              rows={4}
+              value={pgnDraft}
+              onChange={(e) => {
+                setPgnDraft(e.target.value);
+                if (importError) setImportError(null);
+              }}
+              placeholder="Nalepi PGN tekst partije (npr. 1. e4 e5 2. Nf3 Nc6 3. Bb5...)"
+            />
+            <div className="academy-pgn-actions">
+              <button
+                type="button"
+                id="btn-submit-pgn-import"
+                className="academy-primary-compact"
+                onClick={handleSubmitPgnImport}
+              >
+                Uvezi partiju
+              </button>
+            </div>
+          </div>
+        )}
+
+        {importError ? (
+          <p className="academy-pgn-error" role="alert">
+            {importError}
+          </p>
+        ) : null}
+      </div>
+    );
   };
 
   const isBoardDockMode = view === 'puzzle' || view === 'tutorial';
@@ -277,6 +837,34 @@ export function Academy({
           </div>
         ) : view === 'tutorial' ? (
           <div className="academy-tutorial-content">
+            <div className="academy-tutorial-toolbar">
+              <button
+                type="button"
+                id="btn-open-pgn-import"
+                className="academy-pgn-trigger-btn"
+                disabled={tutorialAnimating}
+                onClick={() => {
+                  setImportError(null);
+                  setImporterOpen((prev) => !prev);
+                }}
+              >
+                {importerOpen ? 'Zatvori uvoz PGN' : '📂 Učitaj PGN'}
+              </button>
+              {activeTutorialLesson.isCustom ? (
+                <button
+                  type="button"
+                  id="btn-delete-custom-pgn"
+                  className="academy-delete-pgn-btn"
+                  disabled={tutorialAnimating}
+                  onClick={() => onDeleteCustomLesson(activeTutorialLesson.id)}
+                >
+                  Obriši
+                </button>
+              ) : null}
+            </div>
+
+            {renderPgnImporterBox()}
+
             <div className="academy-tutorial-tabs" role="tablist" aria-label="Kategorije 3D tutorijala">
               {ACADEMY_TUTORIAL_CATEGORIES.map((category) => {
                 const isActive = category.id === activeTutorialCategory;
@@ -289,7 +877,7 @@ export function Academy({
                     className={`academy-tutorial-tab ${isActive ? 'active' : ''}`}
                     disabled={tutorialAnimating}
                     onClick={() => {
-                      const firstInCat = CHESS_ACADEMY_LESSONS.find(
+                      const firstInCat = allTutorialLessons.find(
                         (item) => item.category === category.id
                       );
                       if (firstInCat) onSelectTutorialLesson(firstInCat.id);
@@ -299,6 +887,20 @@ export function Academy({
                   </button>
                 );
               })}
+              {customLessons.length > 0 ? (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTutorialCategory === 'Uvezene'}
+                  className={`academy-tutorial-tab ${activeTutorialCategory === 'Uvezene' ? 'active' : ''}`}
+                  disabled={tutorialAnimating}
+                  onClick={() => {
+                    if (customLessons[0]) onSelectTutorialLesson(customLessons[0].id);
+                  }}
+                >
+                  Uvezene ({customLessons.length})
+                </button>
+              ) : null}
             </div>
 
             <div className="academy-tutorial-picker">
@@ -361,6 +963,110 @@ export function Academy({
                 </p>
               ) : null}
             </article>
+
+            <section id="academy-lichess-box" className="academy-lichess-box" aria-live="polite">
+              <div className="academy-lichess-header">
+                <span className="academy-lichess-eyebrow">LICHESS MASTERS BAZA</span>
+                {lichessStats.status === 'ready' ? (
+                  <span className="academy-lichess-meta">
+                    {[
+                      lichessStats.eco,
+                      lichessStats.openingName,
+                      `${lichessStats.totalGames.toLocaleString('sr-RS')} partija`
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                ) : null}
+              </div>
+
+              {lichessStats.status === 'loading' ? (
+                <p className="academy-lichess-note">Učitavanje velemajstorske statistike...</p>
+              ) : lichessStats.status === 'empty' ? (
+                <p className="academy-lichess-note">Pozicija van master baze.</p>
+              ) : lichessStats.status === 'rate-limited' ? (
+                <p className="academy-lichess-note">
+                  Privremeno ograničenje zahteva. Pokušaj ponovo za minut.
+                </p>
+              ) : lichessStats.status === 'offline' ? (
+                <p className="academy-lichess-note">
+                  Velemajstorska statistika trenutno nije dostupna.
+                </p>
+              ) : lichessStats.status === 'ready' ? (
+                <>
+                  <ul className="academy-lichess-moves">
+                    {lichessStats.topMoves.map((move) => (
+                      <li key={move.uci} className="academy-lichess-move-row">
+                        <div className="academy-lichess-move-top">
+                          <strong className="academy-lichess-san">{move.san}</strong>
+                          <span className="academy-lichess-games">
+                            {move.totalGames.toLocaleString('sr-RS')} partija
+                          </span>
+                          <span className="academy-lichess-pcts">
+                            B {move.whitePct}% · R {move.drawPct}% · C {move.blackPct}%
+                          </span>
+                        </div>
+                        <svg
+                          className="academy-lichess-wdl-bar"
+                          viewBox="0 0 100 6"
+                          preserveAspectRatio="none"
+                          aria-hidden="true"
+                        >
+                          <rect x={0} y={0} width={move.whitePct} height={6} fill="#eceef2" />
+                          <rect
+                            x={move.whitePct}
+                            y={0}
+                            width={move.drawPct}
+                            height={6}
+                            fill="#64748b"
+                          />
+                          <rect
+                            x={move.whitePct + move.drawPct}
+                            y={0}
+                            width={move.blackPct}
+                            height={6}
+                            fill="#1f2937"
+                          />
+                        </svg>
+                      </li>
+                    ))}
+                  </ul>
+                  {lichessStats.topGames.length > 0 ? (
+                    <div className="academy-lichess-top-games">
+                      <span className="academy-lichess-subhead">
+                        Master partije iz ove pozicije
+                      </span>
+                      <ul className="academy-remote-games-list">
+                        {lichessStats.topGames.map((game) => (
+                          <li key={game.id} className="academy-remote-game-row">
+                            <div className="academy-remote-game-info">
+                              <strong>
+                                {game.whiteName}
+                                {game.whiteRating ? ` (${game.whiteRating})` : ''} – {game.blackName}
+                                {game.blackRating ? ` (${game.blackRating})` : ''}
+                              </strong>
+                              <span>
+                                {[game.year ? String(game.year) : null, formatMasterResult(game.winner)]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="academy-remote-load-btn"
+                              disabled={loadingGameId !== null || tutorialAnimating}
+                              onClick={() => void handleLoadMasterGame(game.id)}
+                            >
+                              {loadingGameId === game.id ? 'Učitavanje...' : 'Učitaj u 3D'}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </section>
 
             <div className="academy-actions">
               {!isTutorialFinished ? (
@@ -439,13 +1145,29 @@ export function Academy({
                   <p className="academy-eyebrow">3D MENTOR ALISTAIR</p>
                   <h2 id="academy-mentor-heading">Interaktivni 3D Tutorijal (30 lekcija)</h2>
                 </div>
-                <span className="academy-mentor-progress">
-                  {completedTutorials.length}/{CHESS_ACADEMY_LESSONS.length}
-                </span>
+                <div className="academy-mentor-header-right">
+                  <button
+                    type="button"
+                    id="btn-open-pgn-import"
+                    className="academy-pgn-trigger-btn"
+                    onClick={() => {
+                      setImportError(null);
+                      setImporterOpen((prev) => !prev);
+                    }}
+                  >
+                    {importerOpen ? 'Zatvori uvoz' : '📂 Učitaj PGN'}
+                  </button>
+                  <span className="academy-mentor-progress">
+                    {completedTutorials.length}/{CHESS_ACADEMY_LESSONS.length}
+                  </span>
+                </div>
               </div>
               <p className="academy-mentor-desc">
-                Pokreni poteze korak po korak direktno na 3D tabli uz komentare mentora i nastavi borbu iz bilo koje pozicije.
+                Pokreni poteze korak po korak direktno na 3D tabli uz komentare mentora, statistiku velemajstora ili uvezi sopstvenu PGN partiju.
               </p>
+
+              {renderPgnImporterBox()}
+
               <div className="academy-mentor-cats">
                 {ACADEMY_TUTORIAL_CATEGORIES.map((category) => {
                   const catLessons = CHESS_ACADEMY_LESSONS.filter(
@@ -469,6 +1191,19 @@ export function Academy({
                     </button>
                   );
                 })}
+                {customLessons.length > 0 ? (
+                  <button
+                    type="button"
+                    className="academy-mentor-cat-btn academy-mentor-cat-custom"
+                    onClick={() => onOpenTutorial('Uvezene')}
+                  >
+                    <div className="academy-mentor-cat-top">
+                      <strong>Uvezene partije ({customLessons.length})</strong>
+                      <span>PGN</span>
+                    </div>
+                    <p>Tvoje sačuvane PGN partije spremne za 3D analizu i preuzimanje.</p>
+                  </button>
+                ) : null}
               </div>
             </section>
 

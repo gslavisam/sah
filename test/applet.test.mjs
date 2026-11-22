@@ -801,6 +801,330 @@ test('.gitignore anchors root /data/ so src/data/chessAcademyLessons.ts is inclu
   assert.ok(fs.existsSync(path.join(ROOT, 'src/data/chessAcademyLessons.ts')), 'src/data/chessAcademyLessons.ts must exist');
 });
 
+test('PGN service parses annotated PGNs with custom FEN, strips clock tags, reconstructs FEN, and exports round-trip PGN', async () => {
+  const {
+    stripPgnCommandTags,
+    parsePgnToLesson,
+    reconstructLessonFen,
+    exportMovesToPgn,
+  } = await import('../src/services/pgnService.ts');
+
+  assert.equal(
+    stripPgnCommandTags('Sjajan potez! {[%clk 0:09:58]} {[%eval 0.35]}'),
+    'Sjajan potez! {} {}'
+  );
+  assert.equal(
+    stripPgnCommandTags('Kontrola centra [%clk 0:09:58] [%eval +0.25]'),
+    'Kontrola centra'
+  );
+
+  // Empty/invalid PGN throws localized error
+  assert.throws(() => parsePgnToLesson('   '), /Unesi ili izaberi PGN/);
+  assert.throws(() => parsePgnToLesson('not a valid chess move z9'), /Neispravan PGN/);
+
+  // Annotated PGN with custom starting FEN, comment + [%clk], disambiguated knight move, and pawn promotion
+  const customFen = 'k7/4P3/8/8/8/8/8/4K3 w - - 0 40';
+  const promoPgn = [
+    '[Event "Test Promocije"]',
+    '[White "Carobnjak"]',
+    '[Black "Alistair"]',
+    '[Date "2026.11.22"]',
+    '[Result "1-0"]',
+    '[SetUp "1"]',
+    `[FEN "${customFen}"]`,
+    '',
+    '40. e8=Q+ { Promocija uz šah! [%clk 0:04:12] } 1-0',
+  ].join('\n');
+
+  const promoLesson = parsePgnToLesson(promoPgn);
+  assert.equal(promoLesson.category, 'Uvezene');
+  assert.equal(promoLesson.isCustom, true);
+  assert.equal(promoLesson.initialFen, customFen);
+  assert.equal(promoLesson.steps.length, 1);
+  assert.equal(promoLesson.steps[0].from, 'e7');
+  assert.equal(promoLesson.steps[0].to, 'e8');
+  assert.equal(promoLesson.steps[0].promotion, 'queen');
+  assert.equal(promoLesson.steps[0].explanation, 'Promocija uz šah!');
+
+  // Reconstruct FEN before and after step 1
+  assert.equal(reconstructLessonFen(promoLesson, 0), customFen);
+  assert.equal(reconstructLessonFen(promoLesson, 1), 'k3Q3/8/8/8/8/8/8/4K3 b - - 0 40');
+
+  // Full game with SAN disambiguation (Nbd7)
+  const disambigPgn = [
+    '[Event "Philidor"]',
+    '[ECO "C41"]',
+    '[White "Beli"]',
+    '[Black "Crni"]',
+    '1. e4 e5 2. Nf3 d6 3. d4 Nf6 4. Nc3 Nbd7 *',
+  ].join('\n');
+  const philidor = parsePgnToLesson(disambigPgn);
+  assert.equal(philidor.badge, 'C41');
+  assert.equal(philidor.steps.length, 8);
+  assert.equal(philidor.steps[7].from, 'b8');
+  assert.equal(philidor.steps[7].to, 'd7');
+
+  // Export round-trip from custom starting FEN (e.g., after Igraj odavde)
+  const exported = exportMovesToPgn({
+    startingFen: customFen,
+    moves: [{ from: 'e7', to: 'e8', promotion: 'queen' }],
+    result: '1-0',
+    whiteName: 'Milan',
+    blackName: 'Alistair (AI)',
+  });
+  assert.ok(exported.includes('[SetUp "1"]'));
+  assert.ok(exported.includes(`[FEN "${customFen}"]`));
+  assert.ok(exported.includes('e8=Q+'));
+  assert.ok(exported.includes('[White "Milan"]'));
+});
+
+test('Lichess Masters Explorer service caches responses & master PGNs, computes top-3 W/D/L and topGames, and backs off 60s on HTTP 429', async () => {
+  const {
+    fetchLichessMasterStats,
+    fetchLichessMasterGamePgn,
+    __resetLichessExplorerForTests,
+  } = await import('../src/services/lichessExplorerService.ts');
+
+  __resetLichessExplorerForTests();
+
+  let fetchCalls = 0;
+  let now = 1_000_000;
+  const mockOkFetch = async (url) => {
+    fetchCalls += 1;
+    if (String(url).includes('/masters/pgn/')) {
+      return new Response('[Event "Master Game"]\n1. e4 e5 2. Nf3 Nc6 *', { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({
+        white: 400,
+        draws: 350,
+        black: 250,
+        opening: { eco: 'C50', name: 'Italian Game' },
+        moves: [
+          { uci: 'e2e4', san: 'e4', white: 200, draws: 150, black: 150 },
+          { uci: 'd2d4', san: 'd4', white: 140, draws: 120, black: 40 },
+          { uci: 'c2c4', san: 'c4', white: 40, draws: 50, black: 10 },
+          { uci: 'g1f3', san: 'Nf3', white: 20, draws: 30, black: 50 },
+        ],
+        topGames: [
+          {
+            id: 'abc12345',
+            winner: 'white',
+            year: 2023,
+            white: { name: 'Carlsen, M', rating: 2853 },
+            black: { name: 'Caruana, F', rating: 2786 },
+          },
+        ],
+      }),
+      { status: 200 }
+    );
+  };
+
+  const fen1 = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  const res1 = await fetchLichessMasterStats(fen1, {
+    fetchImpl: mockOkFetch,
+    nowMs: () => now,
+  });
+  assert.equal(res1.status, 'ready');
+  assert.equal(res1.eco, 'C50');
+  assert.equal(res1.openingName, 'Italian Game');
+  assert.equal(res1.topMoves.length, 3);
+  assert.equal(res1.topMoves[0].san, 'e4');
+  assert.equal(res1.topMoves[0].whitePct + res1.topMoves[0].drawPct + res1.topMoves[0].blackPct, 100);
+  assert.equal(res1.topGames.length, 1);
+  assert.equal(res1.topGames[0].id, 'abc12345');
+  assert.equal(res1.topGames[0].whiteName, 'Carlsen, M');
+
+  // Second query for same FEN hits cache without network call
+  const res1Cached = await fetchLichessMasterStats(fen1, {
+    fetchImpl: mockOkFetch,
+    nowMs: () => now,
+  });
+  assert.equal(fetchCalls, 1);
+  assert.equal(res1Cached.eco, 'C50');
+
+  // Master game PGN fetch caches result across subsequent lookups
+  const masterPgn1 = await fetchLichessMasterGamePgn('abc12345', {
+    fetchImpl: mockOkFetch,
+    nowMs: () => now,
+  });
+  assert.ok(masterPgn1.includes('1. e4 e5'));
+  const masterPgn2 = await fetchLichessMasterGamePgn('abc12345', {
+    fetchImpl: mockOkFetch,
+    nowMs: () => now,
+  });
+  assert.equal(masterPgn2, masterPgn1);
+  assert.equal(fetchCalls, 2);
+
+  // Empty database position returns status: 'empty'
+  const resEmpty = await fetchLichessMasterStats('8/8/8/8/8/8/8/K6k w - - 0 1', {
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ white: 0, draws: 0, black: 0, moves: [] }), { status: 200 }),
+    nowMs: () => now,
+  });
+  assert.equal(resEmpty.status, 'empty');
+
+  // HTTP 429 triggers 60-second cooldown preventing further fetches
+  let limitedCalls = 0;
+  const mock429Fetch = async () => {
+    limitedCalls += 1;
+    return new Response('Too Many Requests', { status: 429 });
+  };
+  const fen2 = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1';
+  const limited = await fetchLichessMasterStats(fen2, {
+    fetchImpl: mock429Fetch,
+    nowMs: () => now,
+  });
+  assert.equal(limited.status, 'rate-limited');
+  assert.equal(limitedCalls, 1);
+
+  const fen3 = 'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2';
+  const stillLimited = await fetchLichessMasterStats(fen3, {
+    fetchImpl: mock429Fetch,
+    nowMs: () => now + 30_000,
+  });
+  assert.equal(stillLimited.status, 'rate-limited');
+  assert.equal(limitedCalls, 1, 'Rate-limit cooldown must avoid fetching before 60s expires');
+});
+
+test('Online chess import service parses URLs, falls back 404 Lichess IDs to Masters PGN, and parses Lichess NDJSON + Chess.com archives', async () => {
+  const { __resetLichessExplorerForTests } = await import('../src/services/lichessExplorerService.ts');
+  const {
+    parseOnlineChessUrl,
+    fetchPgnFromOnlineUrl,
+    fetchLichessUserGames,
+    fetchChessComUserGames,
+  } = await import('../src/services/onlineChessImportService.ts');
+
+  __resetLichessExplorerForTests();
+
+  assert.deepEqual(parseOnlineChessUrl('https://lichess.org/30WVeXdd/black'), {
+    kind: 'lichess-game',
+    gameId: '30WVeXdd',
+  });
+  assert.deepEqual(parseOnlineChessUrl('https://lichess.org/study/AbCdEf12/GhIjKl34'), {
+    kind: 'lichess-study-chapter',
+    studyId: 'AbCdEf12',
+    chapterId: 'GhIjKl34',
+  });
+  assert.deepEqual(parseOnlineChessUrl('https://lichess.org/study/AbCdEf12'), {
+    kind: 'lichess-study',
+    studyId: 'AbCdEf12',
+  });
+  assert.deepEqual(parseOnlineChessUrl('https://www.chess.com/game/live/123456'), {
+    kind: 'chesscom-url',
+  });
+
+  // 404 on regular Lichess export falls back to Lichess Masters PGN endpoint
+  const fallbackPgn = await fetchPgnFromOnlineUrl('https://lichess.org/mast1234', {
+    fetchImpl: async (url) => {
+      if (String(url).includes('/game/export/')) {
+        return new Response('Not found', { status: 404 });
+      }
+      if (String(url).includes('/masters/pgn/mast1234')) {
+        return new Response('[Event "Masters"]\n1. d4 Nf6 *', { status: 200 });
+      }
+      return new Response('Bad URL', { status: 500 });
+    },
+  });
+  assert.ok(fallbackPgn.includes('1. d4 Nf6'));
+
+  await assert.rejects(
+    () => fetchPgnFromOnlineUrl('https://www.chess.com/game/live/123456'),
+    /korisničko ime/i
+  );
+
+  // Lichess NDJSON games feed
+  const lichessGames = await fetchLichessUserGames('DrNykterstein', {
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          id: 'gm1',
+          winner: 'white',
+          createdAt: 1700000000000,
+          opening: { name: 'Sicilian Defense' },
+          players: {
+            white: { user: { name: 'DrNykterstein' }, rating: 2900 },
+            black: { user: { name: 'Opponent' }, rating: 2750 },
+          },
+          pgn: '1. e4 c5 *',
+        }) + '\n',
+        { status: 200 }
+      ),
+  });
+  assert.equal(lichessGames.length, 1);
+  assert.equal(lichessGames[0].source, 'lichess');
+  assert.equal(lichessGames[0].result, '1-0');
+  assert.equal(lichessGames[0].openingName, 'Sicilian Defense');
+
+  // Chess.com player monthly archive feed
+  const chessComGames = await fetchChessComUserGames('Hikaru', {
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/games/archives')) {
+        return new Response(
+          JSON.stringify({ archives: ['https://api.chess.com/pub/player/hikaru/games/2026/11'] }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          games: [
+            {
+              url: 'https://www.chess.com/game/live/99',
+              rules: 'chess',
+              end_time: 1700000000,
+              white: { username: 'Hikaru', rating: 3250, result: 'win' },
+              black: { username: 'DanielNaroditsky', rating: 3180, result: 'checkmated' },
+              pgn: '[ECOUrl "https://www.chess.com/openings/Ruy-Lopez-Opening"]\n1. e4 e5 2. Nf3 Nc6 3. Bb5 *',
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    },
+  });
+  assert.equal(chessComGames.length, 1);
+  assert.equal(chessComGames[0].source, 'chesscom');
+  assert.equal(chessComGames[0].result, '1-0');
+  assert.equal(chessComGames[0].openingName, 'Ruy Lopez Opening');
+});
+
+test('Academy PGN import/delete, online Lichess/Chess.com importer UI, engine getMoveHistory, and HUD/checkmate PGN export are wired', () => {
+  const academySrc = fs.readFileSync(path.join(ROOT, 'src/components/Academy.tsx'), 'utf-8');
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+
+  assert.ok(academySrc.includes('id="btn-open-pgn-import"'));
+  assert.ok(academySrc.includes('id="academy-pgn-importer"'));
+  assert.ok(academySrc.includes('id="tab-import-masters"'));
+  assert.ok(academySrc.includes('id="tab-import-online"'));
+  assert.ok(academySrc.includes('id="tab-import-file"'));
+  assert.ok(academySrc.includes('id="select-masters-preset"'));
+  assert.ok(academySrc.includes('id="input-online-pgn-url"'));
+  assert.ok(academySrc.includes('id="btn-fetch-online-url"'));
+  assert.ok(academySrc.includes('id="input-online-username"'));
+  assert.ok(academySrc.includes('id="btn-fetch-player-games"'));
+  assert.ok(academySrc.includes('id="input-pgn-file"'));
+  assert.ok(academySrc.includes('id="textarea-pgn-input"'));
+  assert.ok(academySrc.includes('id="btn-submit-pgn-import"'));
+  assert.ok(academySrc.includes('id="btn-delete-custom-pgn"'));
+  assert.ok(academySrc.includes('id="academy-lichess-box"'));
+  assert.ok(academySrc.includes('fetchLichessMasterStats('));
+  assert.ok(academySrc.includes('fetchLichessMasterGamePgn('));
+
+  assert.ok(appTsx.includes('id="btn-export-pgn"'));
+  assert.ok(appTsx.includes('id="btn-checkmate-export-pgn"'));
+  assert.ok(appTsx.includes('exportMovesToPgn('));
+  assert.ok(appTsx.includes('downloadPgnFile('));
+  assert.ok(appTsx.includes('parsePgnToLesson('));
+
+  assert.ok(engineSrc.includes('function getMoveHistory()'));
+  assert.ok(engineSrc.includes('gameStartingFen = getFen()'));
+  assert.ok(engineSrc.includes('getMoveHistory,'));
+});
+
+
+
 
 
 

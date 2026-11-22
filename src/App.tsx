@@ -21,7 +21,19 @@ import type { SceneThemeId } from './services/sceneThemes';
 import type { OnlinePersonaId, PreferredSide, TimeControlId } from './shared/multiplayerTypes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 import { academyProgression } from './services/academyProgression';
-import { CHESS_ACADEMY_LESSONS, type AcademyCategory } from './data/chessAcademyLessons';
+import {
+  CHESS_ACADEMY_LESSONS,
+  type AcademyCategory,
+  type ChessAcademyLesson
+} from './data/chessAcademyLessons';
+import {
+  downloadPgnFile,
+  exportMovesToPgn,
+  loadCustomPgnLessons,
+  parsePgnToLesson,
+  persistCustomPgnLessons,
+  type GameExportSnapshot
+} from './services/pgnService';
 import {
   classifyPlayerMoveQuality,
   evalToDisplay,
@@ -123,6 +135,12 @@ export default function App() {
   const [tutorialAnimating, setTutorialAnimating] = useState(false);
   const [tutorialGameOver, setTutorialGameOver] = useState(false);
   const tutorialAnimTimerRef = useRef<number | null>(null);
+  const [customLessons, setCustomLessons] = useState<ChessAcademyLesson[]>(() =>
+    loadCustomPgnLessons()
+  );
+  const customLessonsRef = useRef<ChessAcademyLesson[]>(customLessons);
+  customLessonsRef.current = customLessons;
+  const [hasPlayedMoves, setHasPlayedMoves] = useState(false);
   const [is2DMode, setIs2DMode] = useState(false);
   const [ambience, setAmbience] = useState<AmbienceMode>(() => {
     try {
@@ -486,11 +504,17 @@ export default function App() {
     if (isOnlineModeRef.current || academyVisibleRef.current) return;
     setPendingPromotion(null);
     const win = window as unknown as {
-      wizardChess?: { undoPlayerMove?: () => boolean; getFen?: () => string };
+      wizardChess?: {
+        undoPlayerMove?: () => boolean;
+        getFen?: () => string;
+        getMoveHistory?: () => { moveCount?: number };
+      };
     };
     const success = win.wizardChess?.undoPlayerMove?.();
     if (success) {
       soundService.playUndo();
+      const remainingMoves = win.wizardChess?.getMoveHistory?.()?.moveCount ?? 0;
+      setHasPlayedMoves(remainingMoves > 0);
       stockfishService.cancelPending();
       const undoFen = win.wizardChess?.getFen?.();
       if (undoFen) {
@@ -534,6 +558,7 @@ export default function App() {
       if (!customEvt.detail) return;
 
       const detail = customEvt.detail;
+      setHasPlayedMoves(true);
       setPlayerColor(detail.playerColor);
       const isPlayerMove = detail.move ? detail.move.color === detail.playerColor : false;
       const isCheckmate = Boolean(
@@ -672,6 +697,7 @@ export default function App() {
 
     const handleResetEvent = (e: Event) => {
       const detail = (e as CustomEvent<{ playerColor?: 'w' | 'b' }>).detail;
+      setHasPlayedMoves(false);
       aiRequestSeqRef.current += 1;
       evalReqSeqRef.current += 1;
       setIsLoadingAI(false);
@@ -690,12 +716,29 @@ export default function App() {
       setAiMessage(`Nova partija je započeta na oltaru! ${p.name} je spreman za tvoj potez.`);
     };
 
+    const handleUndoSyncEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ remainingMoves?: number }>).detail;
+      setHasPlayedMoves(Boolean(detail?.remainingMoves && detail.remainingMoves > 0));
+    };
+
+    const handleOnlineSyncEvent = () => {
+      const win = window as Window & {
+        wizardChess?: { getMoveHistory?: () => { moveCount?: number } };
+      };
+      const count = win.wizardChess?.getMoveHistory?.()?.moveCount ?? 0;
+      setHasPlayedMoves(count > 0);
+    };
+
     window.addEventListener('wizardchess:move', handleMoveEvent);
     window.addEventListener('wizardchess:reset', handleResetEvent);
+    window.addEventListener('wizardchess:undo', handleUndoSyncEvent);
+    window.addEventListener('wizardchess:online-sync', handleOnlineSyncEvent);
 
     return () => {
       window.removeEventListener('wizardchess:move', handleMoveEvent);
       window.removeEventListener('wizardchess:reset', handleResetEvent);
+      window.removeEventListener('wizardchess:undo', handleUndoSyncEvent);
+      window.removeEventListener('wizardchess:online-sync', handleOnlineSyncEvent);
     };
   }, []);
 
@@ -728,7 +771,8 @@ export default function App() {
         }
         setTutorialAnimating(false);
         setTutorialGameOver(Boolean(detail.gameOver));
-        const activeLesson = CHESS_ACADEMY_LESSONS.find(
+        const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
+        const activeLesson = allLessons.find(
           (item) => item.id === tutorialLessonIdRef.current
         );
         setTutorialStepIndex((prev) => {
@@ -836,10 +880,11 @@ export default function App() {
   };
 
   const handleOpenTutorial = (category?: AcademyCategory) => {
+    const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
     const targetLesson =
-      (category ? CHESS_ACADEMY_LESSONS.find((item) => item.category === category) : undefined) ||
-      CHESS_ACADEMY_LESSONS.find((item) => item.id === tutorialLessonIdRef.current) ||
-      CHESS_ACADEMY_LESSONS[0];
+      (category ? allLessons.find((item) => item.category === category) : undefined) ||
+      allLessons.find((item) => item.id === tutorialLessonIdRef.current) ||
+      allLessons[0];
     const win = window as Window & {
       wizardChess?: {
         enterAcademyTutorial?: (
@@ -864,8 +909,9 @@ export default function App() {
     setAcademyError(null);
   };
 
-  const handleSelectTutorialLesson = (lessonId: string) => {
-    const targetLesson = CHESS_ACADEMY_LESSONS.find((item) => item.id === lessonId);
+  const handleSelectTutorialLesson = (lessonId: string, customOverride?: ChessAcademyLesson[]) => {
+    const allLessons = [...(customOverride ?? customLessonsRef.current), ...CHESS_ACADEMY_LESSONS];
+    const targetLesson = allLessons.find((item) => item.id === lessonId);
     if (!targetLesson) return;
     if (tutorialAnimTimerRef.current !== null) {
       window.clearTimeout(tutorialAnimTimerRef.current);
@@ -893,7 +939,8 @@ export default function App() {
 
   const handlePlayTutorialStep = () => {
     if (tutorialAnimating) return;
-    const lesson = CHESS_ACADEMY_LESSONS.find((item) => item.id === tutorialLessonIdRef.current);
+    const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
+    const lesson = allLessons.find((item) => item.id === tutorialLessonIdRef.current);
     const step = lesson?.steps[tutorialStepIndexRef.current];
     if (!lesson || !step) return;
     const win = window as Window & {
@@ -922,8 +969,63 @@ export default function App() {
     handleSelectTutorialLesson(tutorialLessonIdRef.current);
   };
 
+  const handleImportPgn = (pgnText: string): { ok: boolean; error?: string } => {
+    try {
+      const newLesson = parsePgnToLesson(pgnText);
+      const updated = [newLesson, ...customLessonsRef.current].slice(0, 25);
+      customLessonsRef.current = updated;
+      setCustomLessons(updated);
+      persistCustomPgnLessons(updated);
+
+      if (tutorialAnimTimerRef.current !== null) {
+        window.clearTimeout(tutorialAnimTimerRef.current);
+        tutorialAnimTimerRef.current = null;
+      }
+
+      const win = window as Window & {
+        wizardChess?: {
+          enterAcademyTutorial?: (
+            fen?: string,
+            options?: { viewSide?: 'w' | 'b'; immediateCamera?: boolean }
+          ) => boolean;
+        };
+      };
+      if (!win.wizardChess?.enterAcademyTutorial?.(newLesson.initialFen, { viewSide: 'w' })) {
+        return { ok: false, error: 'Partija je sačuvana, ali 3D tabla nije mogla da je otvori.' };
+      }
+
+      evalReqSeqRef.current += 1;
+      stockfishService.cancelPending();
+      setIsEvaluating(false);
+      setAcademyView('tutorial');
+      setTutorialLessonId(newLesson.id);
+      setTutorialStepIndex(0);
+      setTutorialAnimating(false);
+      setTutorialGameOver(false);
+      setAcademyError(null);
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Neispravan PGN zapis.',
+      };
+    }
+  };
+
+  const handleDeleteCustomLesson = (lessonId: string) => {
+    const remaining = customLessonsRef.current.filter((item) => item.id !== lessonId);
+    customLessonsRef.current = remaining;
+    setCustomLessons(remaining);
+    persistCustomPgnLessons(remaining);
+    if (tutorialLessonIdRef.current === lessonId) {
+      const fallback = remaining[0] || CHESS_ACADEMY_LESSONS[0];
+      handleSelectTutorialLesson(fallback.id, remaining);
+    }
+  };
+
   const handleTakeOverTutorial = () => {
-    const lesson = CHESS_ACADEMY_LESSONS.find((item) => item.id === tutorialLessonIdRef.current);
+    const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
+    const lesson = allLessons.find((item) => item.id === tutorialLessonIdRef.current);
     const preferredSide: 'w' | 'b' = lesson?.category === 'Odbrana' ? 'b' : 'w';
     if (tutorialAnimTimerRef.current !== null) {
       window.clearTimeout(tutorialAnimTimerRef.current);
@@ -940,6 +1042,7 @@ export default function App() {
       setAcademyError('Partija nije mogla da se preuzme iz tutorijala.');
       return;
     }
+    setHasPlayedMoves(false);
     setTutorialAnimating(false);
     setAcademyVisible(false);
     setAcademyView('home');
@@ -1189,6 +1292,54 @@ export default function App() {
     }
   };
 
+  const handleExportPgn = () => {
+    const win = window as Window & {
+      wizardChess?: {
+        getMoveHistory?: () => GameExportSnapshot & { moveCount?: number };
+      };
+    };
+    const history = win.wizardChess?.getMoveHistory?.();
+    if (!history) return;
+    if (history.moves.length === 0 && !history.hasIncompleteHistory && !history.startingFen) {
+      return;
+    }
+
+    const personaName = PERSONAS[selectedPersonaRef.current].name;
+    const playerDisplayName = authSnap.user?.displayName || 'Igrač';
+    let whiteName = 'Beli';
+    let blackName = 'Crni';
+    let eventName = 'Wizard Chess 3D Partija';
+
+    if (isOnlineModeRef.current && onlineSession.roomState) {
+      whiteName = onlineSession.roomState.players.w?.displayName || 'Beli';
+      blackName = onlineSession.roomState.players.b?.displayName || 'Crni';
+      eventName = `Wizard Chess Online Duel (${onlineSession.roomId || 'online'})`;
+    } else {
+      const aiName = `${personaName} (AI)`;
+      if (history.playerColor === 'b') {
+        whiteName = aiName;
+        blackName = playerDisplayName;
+      } else {
+        whiteName = playerDisplayName;
+        blackName = aiName;
+      }
+    }
+
+    const pgn = exportMovesToPgn({
+      startingFen: history.startingFen,
+      currentFen: history.currentFen,
+      hasIncompleteHistory: history.hasIncompleteHistory,
+      moves: history.moves,
+      result: history.result,
+      playerColor: history.playerColor,
+      whiteName,
+      blackName,
+      eventName,
+    });
+    downloadPgnFile(pgn);
+    setMobileSheetOpen(false);
+  };
+
   return (
     <>
       <div id="loading-overlay">
@@ -1421,6 +1572,16 @@ export default function App() {
           >
             🔄 Nova
           </button>
+          <button
+            type="button"
+            className="hud-btn"
+            id="btn-export-pgn"
+            disabled={!hasPlayedMoves}
+            title="Preuzmi odigranu partiju kao PGN fajl"
+            onClick={handleExportPgn}
+          >
+            ⬇ PGN
+          </button>
         </div>
 
         {/* ── Capsule 3: Podešavanja ── */}
@@ -1518,6 +1679,14 @@ export default function App() {
             <button className="checkmate-btn" id="btn-checkmate-newgame">
               Nova partija
             </button>
+            <button
+              type="button"
+              className="checkmate-btn"
+              id="btn-checkmate-export-pgn"
+              onClick={handleExportPgn}
+            >
+              Preuzmi PGN
+            </button>
             <button className="checkmate-btn secondary" id="btn-checkmate-dismiss">
               Zatvori
             </button>
@@ -1535,6 +1704,7 @@ export default function App() {
           tutorialStepIndex={tutorialStepIndex}
           tutorialAnimating={tutorialAnimating}
           tutorialGameOver={tutorialGameOver}
+          customLessons={customLessons}
           error={academyError}
           onClose={handleCloseAcademy}
           onOpenPuzzle={handleStartPuzzle}
@@ -1544,11 +1714,13 @@ export default function App() {
           onShowHint={() => setAcademyHintCount((count) => Math.min(count + 1, 3))}
           onRetry={handleRetryPuzzle}
           onOpenTutorial={handleOpenTutorial}
-          onSelectTutorialLesson={handleSelectTutorialLesson}
+          onSelectTutorialLesson={(id) => handleSelectTutorialLesson(id)}
           onPlayTutorialStep={handlePlayTutorialStep}
           onResetTutorialLesson={handleResetTutorialLesson}
           onTakeOverTutorial={handleTakeOverTutorial}
           onLeaveTutorial={handleLeaveTutorial}
+          onImportPgn={handleImportPgn}
+          onDeleteCustomLesson={handleDeleteCustomLesson}
         />
       ) : null}
 

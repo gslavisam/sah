@@ -292,9 +292,14 @@ body.cinematic-ui-hidden .mobile-controls-trigger {
   backdrop-filter: none;
 }
 
-#hud-dock .hud-btn:hover {
+#hud-dock .hud-btn:hover:not(:disabled) {
   background: rgba(212, 175, 55, 0.12);
   border-color: rgba(212, 175, 55, 0.4);
+}
+
+#hud-dock .hud-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 
 #hud-dock .hud-btn.active {
@@ -2168,7 +2173,15 @@ body.academy-puzzle-active #checkmate-overlay {
   .academy-tutorial-select,
   .academy-takeover-button,
   .academy-primary-compact,
-  .academy-secondary-button {
+  .academy-secondary-button,
+  .academy-pgn-trigger-btn,
+  .academy-delete-pgn-btn,
+  .academy-pgn-file-btn,
+  .academy-pgn-close-inline,
+  .academy-importer-tab,
+  .academy-importer-input,
+  .academy-importer-platform-select,
+  .academy-remote-load-btn {
     min-height: 44px;
   }
 
@@ -3436,6 +3449,467 @@ body.academy-puzzle-active #checkmate-overlay {
     height: min(78vw, 520px);
   }
 }
+
+/* =========================================================================
+   Academy PGN Importer & Lichess Masters Explorer
+   ========================================================================= */
+
+.academy-mentor-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.academy-tutorial-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.academy-pgn-trigger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid rgba(212, 175, 55, 0.42);
+  border-radius: 10px;
+  background: rgba(212, 175, 55, 0.12);
+  color: #f5d76e;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.academy-pgn-trigger-btn:hover:not(:disabled) {
+  background: rgba(212, 175, 55, 0.22);
+  border-color: rgba(245, 215, 110, 0.78);
+}
+
+.academy-pgn-trigger-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.academy-delete-pgn-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.42);
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.academy-delete-pgn-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(248, 113, 113, 0.78);
+}
+
+.academy-delete-pgn-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.academy-pgn-importer {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(212, 175, 55, 0.32);
+  border-radius: 12px;
+  background: rgba(8, 11, 19, 0.88);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.academy-pgn-importer-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.academy-pgn-importer-top strong {
+  color: #f0ece1;
+  font-size: 0.82rem;
+}
+
+.academy-pgn-file-input {
+  display: none;
+}
+
+.academy-pgn-file-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e4e7ed;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.academy-pgn-file-btn:hover {
+  border-color: rgba(212, 175, 55, 0.58);
+  background: rgba(212, 175, 55, 0.14);
+}
+
+.academy-pgn-textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(14, 18, 29, 0.94);
+  color: #f0ece1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.academy-pgn-textarea:focus {
+  outline: 2px solid rgba(245, 215, 110, 0.45);
+  border-color: rgba(212, 175, 55, 0.65);
+}
+
+.academy-pgn-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.academy-pgn-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.academy-mentor-cat-custom {
+  border-color: rgba(125, 211, 252, 0.36);
+}
+
+.academy-mentor-cat-custom:hover,
+.academy-mentor-cat-custom:focus-visible {
+  border-color: rgba(125, 211, 252, 0.78);
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.academy-lichess-box {
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(12, 15, 22, 0.86);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.academy-lichess-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.academy-lichess-eyebrow {
+  color: #d4af37;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+}
+
+.academy-lichess-meta {
+  color: #c5cbd6;
+  font-size: 0.74rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.academy-lichess-note {
+  margin: 0;
+  color: #9aa0a6;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.academy-lichess-moves {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.academy-lichess-move-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.academy-lichess-move-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.academy-lichess-san {
+  color: #f0ece1;
+  font-size: 0.82rem;
+  font-weight: 800;
+  min-width: 42px;
+}
+
+.academy-lichess-games {
+  color: #9aa0a6;
+  font-size: 0.72rem;
+}
+
+.academy-lichess-pcts {
+  margin-left: auto;
+  color: #cbd5e1;
+  font-size: 0.71rem;
+  font-weight: 600;
+}
+
+.academy-lichess-wdl-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  display: block;
+}
+
+.academy-pgn-close-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #cbd5e1;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.academy-pgn-close-inline:hover {
+  border-color: rgba(212, 175, 55, 0.52);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f0ece1;
+}
+
+.academy-importer-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.academy-importer-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #cbd5e1;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.academy-importer-tab:hover {
+  border-color: rgba(212, 175, 55, 0.45);
+  color: #f0ece1;
+}
+
+.academy-importer-tab.active {
+  border-color: rgba(245, 215, 110, 0.72);
+  background: rgba(212, 175, 55, 0.16);
+  color: #f5d76e;
+}
+
+.academy-importer-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.academy-importer-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.academy-importer-input-group {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.academy-importer-input {
+  flex: 1 1 160px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  background: rgba(14, 18, 29, 0.94);
+  color: #f0ece1;
+  font: inherit;
+  font-size: 0.76rem;
+  box-sizing: border-box;
+}
+
+.academy-importer-input:focus {
+  outline: 2px solid rgba(245, 215, 110, 0.45);
+  border-color: rgba(212, 175, 55, 0.65);
+}
+
+.academy-importer-platform-select {
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  background: rgba(14, 18, 29, 0.94);
+  color: #f0ece1;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.academy-importer-platform-select:focus {
+  outline: 2px solid rgba(245, 215, 110, 0.45);
+  border-color: rgba(212, 175, 55, 0.65);
+}
+
+.academy-remote-games-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.academy-remote-game-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(17, 22, 34, 0.78);
+}
+
+.academy-remote-game-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.academy-remote-game-info strong {
+  color: #f0ece1;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.academy-remote-game-info span {
+  color: #9aa0a6;
+  font-size: 0.71rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.academy-remote-load-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  border-radius: 8px;
+  background: rgba(212, 175, 55, 0.14);
+  color: #f5d76e;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.academy-remote-load-btn:hover:not(:disabled) {
+  background: rgba(212, 175, 55, 0.24);
+  border-color: rgba(245, 215, 110, 0.8);
+}
+
+.academy-remote-load-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.academy-lichess-top-games {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.academy-lichess-subhead {
+  color: #d4af37;
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+
 
 
 

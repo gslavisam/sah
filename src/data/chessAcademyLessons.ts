@@ -1,6 +1,11 @@
 import type { PromotionPieceType } from '../shared/chessRules';
 
-export type AcademyCategory = 'Otvaranje' | 'Odbrana' | 'Strategija' | 'Poznata partija';
+export type AcademyCategory =
+  | 'Otvaranje'
+  | 'Odbrana'
+  | 'Strategija'
+  | 'Poznata partija'
+  | 'Uvezene';
 
 export interface AcademyStep {
   moveNumber: string;
@@ -20,6 +25,8 @@ export interface ChessAcademyLesson {
   summary: string;
   initialFen?: string;
   steps: AcademyStep[];
+  isCustom?: boolean;
+  createdAt?: number;
 }
 
 export const ACADEMY_TUTORIAL_CATEGORIES: {
