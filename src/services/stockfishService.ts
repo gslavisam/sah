@@ -80,6 +80,10 @@ class StockfishService {
   private disabled = false;
   private epoch = 0;
 
+  private initTimer: ReturnType<typeof setTimeout> | null = null;
+  private initResolve: ((ok: boolean) => void) | null = null;
+  private initGeneration = 0;
+
   private initWaiters: {
     onUciOk?: () => void;
     onReadyOk?: () => void;
@@ -106,30 +110,41 @@ class StockfishService {
       return this.readyPromise;
     }
 
+    const gen = ++this.initGeneration;
+
     this.readyPromise = new Promise<boolean>((resolve) => {
       let settled = false;
       const finish = (ok: boolean) => {
         if (settled) return;
         settled = true;
-        clearTimeout(initTimer);
-        if (!ok) {
+        if (this.initTimer) {
+          clearTimeout(this.initTimer);
+          this.initTimer = null;
+        }
+        if (this.initResolve === finish) {
+          this.initResolve = null;
+        }
+        if (!ok && gen === this.initGeneration) {
           this.readyPromise = null;
         }
         resolve(ok);
       };
 
-      const initTimer = setTimeout(() => {
+      this.initResolve = finish;
+      this.initTimer = setTimeout(() => {
+        if (gen !== this.initGeneration) return;
         console.warn('Stockfish WASM init timed out; falling back to JS chess AI.');
         this.disabled = true;
         this.cleanupWorker();
         finish(false);
-      }, 8000);
+      }, 6000);
 
       try {
         const worker = new Worker(STOCKFISH_WORKER_URL);
         this.worker = worker;
 
         worker.onmessage = (event: MessageEvent) => {
+          if (gen !== this.initGeneration) return;
           const text = typeof event.data === 'string' ? event.data : String(event.data ?? '');
           const lines = text.split(/\r?\n/);
           for (const rawLine of lines) {
@@ -139,6 +154,7 @@ class StockfishService {
         };
 
         worker.onerror = (err) => {
+          if (gen !== this.initGeneration) return;
           console.warn('Stockfish worker error; using JS fallback:', err);
           this.disabled = true;
           this.cleanupWorker();
@@ -146,17 +162,20 @@ class StockfishService {
         };
 
         this.initWaiters.onUciOk = () => {
+          if (gen !== this.initGeneration) return;
           this.post('setoption name Hash value 16');
           this.post('isready');
         };
 
         this.initWaiters.onReadyOk = () => {
+          if (gen !== this.initGeneration) return;
           this.isReady = true;
           finish(true);
         };
 
         this.post('uci');
       } catch (err) {
+        if (gen !== this.initGeneration) return;
         console.warn('Could not start Stockfish worker:', err);
         this.disabled = true;
         this.cleanupWorker();
@@ -168,6 +187,12 @@ class StockfishService {
   }
 
   private cleanupWorker() {
+    this.initWaiters.onUciOk = undefined;
+    this.initWaiters.onReadyOk = undefined;
+    if (this.initTimer) {
+      clearTimeout(this.initTimer);
+      this.initTimer = null;
+    }
     if (this.activeJob) {
       if (this.activeJob.timeoutHandle) clearTimeout(this.activeJob.timeoutHandle);
       if (!this.activeJob.cancelled) {
@@ -178,7 +203,10 @@ class StockfishService {
     }
     while (this.queue.length > 0) {
       const job = this.queue.shift();
-      job?.resolve(null);
+      if (job && !job.cancelled) {
+        job.cancelled = true;
+        job.resolve(null);
+      }
     }
     if (this.worker) {
       try {
@@ -302,7 +330,7 @@ class StockfishService {
   ): Promise<SearchOutcome | null> {
     const jobEpoch = this.epoch;
     const ok = await this.init();
-    if (!ok || jobEpoch !== this.epoch) {
+    if (!ok || jobEpoch !== this.epoch || !this.isReady || !this.worker) {
       return null;
     }
 
@@ -344,7 +372,7 @@ class StockfishService {
           this.activeJob = null;
           this.pumpQueue();
         }
-      }, 600);
+      }, 300);
     }
   }
 
@@ -364,7 +392,7 @@ class StockfishService {
         `position fen ${fen}`,
         `go movetime ${Math.max(40, Math.round(movetimeMs))}`,
       ],
-      Math.max(2500, movetimeMs + 2200)
+      Math.max(2000, movetimeMs + 1600)
     );
     return outcome ? outcome.evalState : null;
   }
@@ -378,7 +406,7 @@ class StockfishService {
         `position fen ${fen}`,
         `go movetime ${Math.max(80, Math.round(movetimeMs))}`,
       ],
-      Math.max(3000, movetimeMs + 2400)
+      Math.max(2500, movetimeMs + 1800)
     );
     if (!outcome?.bestMoveUci) return null;
     const parsed = parseUciMove(outcome.bestMoveUci);
@@ -404,7 +432,7 @@ class StockfishService {
         `position fen ${fen}`,
         `go movetime ${profile.movetimeMs}`,
       ],
-      Math.max(3000, profile.movetimeMs + 2400)
+      Math.max(2500, profile.movetimeMs + 1800)
     );
     if (!outcome?.bestMoveUci) return null;
     const parsed = parseUciMove(outcome.bestMoveUci);
@@ -418,8 +446,15 @@ class StockfishService {
 
   public terminate() {
     this.epoch += 1;
+    this.initGeneration += 1;
     this.cleanupWorker();
+    if (this.initResolve) {
+      const resolvePending = this.initResolve;
+      this.initResolve = null;
+      resolvePending(false);
+    }
     this.readyPromise = null;
+    this.disabled = false;
   }
 }
 

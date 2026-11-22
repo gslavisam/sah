@@ -8,6 +8,7 @@ interface Props {
   voiceCue?: VoiceCue;
   isLoading: boolean;
   hintDisabled?: boolean;
+  zenMode?: boolean;
   onRequestHint: () => void;
 }
 
@@ -17,6 +18,7 @@ export const AIBubble: React.FC<Props> = ({
   voiceCue,
   isLoading,
   hintDisabled = false,
+  zenMode = false,
   onRequestHint,
 }) => {
   const [minimized, setMinimized] = useState(false);
@@ -24,6 +26,7 @@ export const AIBubble: React.FC<Props> = ({
   const persona = PERSONAS[personaId] || PERSONAS.mentor;
 
   const handleToggleVoice = () => {
+    if (zenMode) return;
     const newState = voiceService.toggleVoice();
     setVoiceActive(newState);
     if (newState) {
@@ -32,10 +35,14 @@ export const AIBubble: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    if (zenMode) {
+      voiceService.stop();
+      return;
+    }
     if (message && !isLoading && voiceActive) {
       voiceService.speak(message, personaId, voiceCue);
     }
-  }, [message, voiceCue, isLoading, personaId, voiceActive]);
+  }, [message, voiceCue, isLoading, personaId, voiceActive, zenMode]);
 
   if (minimized) {
     return (
@@ -54,17 +61,24 @@ export const AIBubble: React.FC<Props> = ({
           <span className="ai-avatar">{persona.avatar}</span>
           <div className="ai-meta">
             <span className="ai-name">{persona.name}</span>
-            <span className="ai-title">{persona.title}</span>
+            <span className="ai-title">{zenMode ? 'Central Park · Zen tekstualni saveti' : persona.title}</span>
           </div>
         </div>
         <div className="ai-bubble-actions">
           <button
             type="button"
-            className={`ai-action-btn voice-btn ${voiceActive ? 'active' : ''}`}
+            className={`ai-action-btn voice-btn ${voiceActive && !zenMode ? 'active' : ''}`}
             onClick={handleToggleVoice}
-            title={voiceActive ? 'Glasovni komentar: Uključen' : 'Glasovni komentar: Isključen'}
+            disabled={zenMode}
+            title={
+              zenMode
+                ? 'Glasovni komentari su isključeni u Park (Zen) režimu'
+                : voiceActive
+                  ? 'Glasovni komentar: Uključen'
+                  : 'Glasovni komentar: Isključen'
+            }
           >
-            {voiceActive ? '🔊 Glas' : '🔇 Nem'}
+            {zenMode ? '🌿 Zen' : voiceActive ? '🔊 Glas' : '🔇 Nem'}
           </button>
           <button
             type="button"

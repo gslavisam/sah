@@ -240,9 +240,11 @@ body.cinematic-ui-hidden .mobile-controls-trigger {
   pointer-events: auto;
 }
 
-@media (max-width: 1040px) and (min-width: 769px) {
+@media (max-width: 1180px) and (min-width: 769px) {
   #hud-dock {
-    gap: 5px;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
   }
 
   #hud-dock .hud-btn {
@@ -299,6 +301,12 @@ body.cinematic-ui-hidden .mobile-controls-trigger {
   background: linear-gradient(135deg, rgba(212, 175, 55, 0.24), rgba(212, 175, 55, 0.08));
   border-color: var(--gold);
   color: var(--gold-bright);
+}
+
+#hud-dock .hud-btn.park-active {
+  background: linear-gradient(135deg, rgba(64, 145, 86, 0.28), rgba(45, 106, 62, 0.12));
+  border-color: rgba(116, 198, 134, 0.65);
+  color: #dcfce7;
 }
 
 /* Desktop: hide mobile-only elements in the dock */
@@ -1856,6 +1864,272 @@ body.academy-puzzle-active #checkmate-overlay {
   color: #ffb7bd;
 }
 
+/* 3D Mentor Tutorial (Home Feature + Board-Docked Drawer) */
+.academy-mentor-feature {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid rgba(212, 175, 55, 0.44);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(212, 175, 55, 0.1), rgba(16, 22, 36, 0.72));
+}
+
+.academy-mentor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.academy-mentor-header h2 {
+  margin-top: 4px;
+  font-size: 1.12rem;
+  letter-spacing: -0.02em;
+}
+
+.academy-mentor-progress {
+  flex: 0 0 auto;
+  color: var(--gold-bright);
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.academy-mentor-desc {
+  margin-top: 8px;
+  color: #c2c8d3;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.academy-mentor-cats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.academy-mentor-cat-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: 1px solid rgba(212, 175, 55, 0.34);
+  border-radius: 12px;
+  background: rgba(10, 14, 24, 0.72);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.academy-mentor-cat-btn:hover,
+.academy-mentor-cat-btn:focus-visible {
+  border-color: var(--gold-bright);
+  background: rgba(212, 175, 55, 0.14);
+  transform: translateY(-2px);
+}
+
+.academy-mentor-cat-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.academy-mentor-cat-top strong {
+  color: #ffedaa;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.academy-mentor-cat-top span {
+  color: var(--gold-bright);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.academy-mentor-cat-btn p {
+  margin: 0;
+  color: #aab2bf;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.academy-tutorial-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.academy-tutorial-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.academy-tutorial-tab {
+  min-height: 40px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #cdd3de;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.academy-tutorial-tab:hover:not(:disabled),
+.academy-tutorial-tab.active {
+  border-color: rgba(245, 215, 110, 0.7);
+  background: rgba(212, 175, 55, 0.18);
+  color: #ffedaa;
+}
+
+.academy-tutorial-tab:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.academy-tutorial-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.academy-tutorial-label {
+  color: #a9b1be;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.academy-tutorial-select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid rgba(212, 175, 55, 0.36);
+  border-radius: 10px;
+  background: rgba(10, 14, 24, 0.92);
+  color: #f4f6fa;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.academy-tutorial-select:focus-visible {
+  outline: 2px solid rgba(245, 215, 110, 0.6);
+  outline-offset: 1px;
+}
+
+.academy-tutorial-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #b7bfcc;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.academy-tutorial-counter {
+  flex: 0 0 auto;
+  color: var(--gold-bright);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.academy-tutorial-card {
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.academy-tutorial-step-code {
+  color: var(--gold);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.academy-tutorial-card h2 {
+  margin-top: 6px;
+  font-size: 1.02rem;
+  line-height: 1.3;
+  color: #f7f4ea;
+}
+
+.academy-tutorial-card p {
+  margin-top: 8px;
+  color: #c5cbd6;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.academy-tutorial-next-hint {
+  margin-top: 10px !important;
+  color: #d7be70 !important;
+  font-size: 0.76rem !important;
+}
+
+.academy-tutorial-done {
+  margin-top: 10px !important;
+  color: #86efac !important;
+  font-size: 0.78rem !important;
+  font-weight: 600;
+}
+
+.academy-takeover-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 1px solid rgba(52, 211, 153, 0.65);
+  border-radius: 11px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(16, 185, 129, 0.12));
+  color: #d1fae5;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.academy-takeover-button:hover:not(:disabled) {
+  border-color: rgba(110, 231, 183, 0.9);
+  background: rgba(16, 185, 129, 0.34);
+  transform: translateY(-1px);
+}
+
+.academy-takeover-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.academy-tutorial-content .academy-actions {
+  margin-top: 2px;
+  gap: 8px;
+}
+
+.academy-tutorial-content .academy-primary-compact:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+
 @media (max-width: 640px) {
   .academy-backdrop {
     align-items: flex-start;
@@ -1876,17 +2150,26 @@ body.academy-puzzle-active #checkmate-overlay {
 
   .academy-backdrop.puzzle-mode .academy-panel {
     width: min(360px, calc(100vw - 16px));
-    max-height: min(42dvh, 360px);
+    max-height: min(46dvh, 390px);
     padding: 12px;
   }
 
-  .academy-area-grid {
+  .academy-area-grid,
+  .academy-mentor-cats {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
   }
 
   .academy-area-card {
     padding: 14px;
+  }
+
+  .academy-tutorial-tab,
+  .academy-tutorial-select,
+  .academy-takeover-button,
+  .academy-primary-compact,
+  .academy-secondary-button {
+    min-height: 44px;
   }
 
   .academy-footer {

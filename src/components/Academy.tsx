@@ -3,12 +3,21 @@ import { ACADEMY_AREAS, LESSONS_BY_AREA, type AcademyAreaId } from '../services/
 import { academyProgression } from '../services/academyProgression';
 import { soundService } from '../services/soundService';
 import { PUZZLES } from '../services/puzzleCatalog';
+import {
+  ACADEMY_TUTORIAL_CATEGORIES,
+  CHESS_ACADEMY_LESSONS,
+  type AcademyCategory
+} from '../data/chessAcademyLessons';
 
 type AcademyProps = {
-  view: 'home' | 'puzzle';
+  view: 'home' | 'puzzle' | 'tutorial';
   puzzleId: string | null;
   feedback: 'idle' | 'wrong' | 'solved';
   hintCount: number;
+  tutorialLessonId: string;
+  tutorialStepIndex: number;
+  tutorialAnimating: boolean;
+  tutorialGameOver: boolean;
   error: string | null;
   onClose: () => void;
   onOpenPuzzle: (id: string) => void;
@@ -17,6 +26,12 @@ type AcademyProps = {
   hasNextPuzzle: boolean;
   onShowHint: () => void;
   onRetry: () => void;
+  onOpenTutorial: (category?: AcademyCategory) => void;
+  onSelectTutorialLesson: (lessonId: string) => void;
+  onPlayTutorialStep: () => void;
+  onResetTutorialLesson: () => void;
+  onTakeOverTutorial: () => void;
+  onLeaveTutorial: () => void;
 };
 
 type AreaId = AcademyAreaId | 'puzzles';
@@ -26,6 +41,10 @@ export function Academy({
   puzzleId,
   feedback,
   hintCount,
+  tutorialLessonId,
+  tutorialStepIndex,
+  tutorialAnimating,
+  tutorialGameOver,
   error,
   onClose,
   onOpenPuzzle,
@@ -33,7 +52,13 @@ export function Academy({
   onLeavePuzzle,
   hasNextPuzzle,
   onShowHint,
-  onRetry
+  onRetry,
+  onOpenTutorial,
+  onSelectTutorialLesson,
+  onPlayTutorialStep,
+  onResetTutorialLesson,
+  onTakeOverTutorial,
+  onLeaveTutorial
 }: AcademyProps) {
   const [selectedArea, setSelectedArea] = useState<AreaId | null>(null);
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
@@ -48,16 +73,44 @@ export function Academy({
   const currentLessons = selectedArea && selectedArea !== 'puzzles' ? LESSONS_BY_AREA[selectedArea] : [];
   const currentLessonIndex = selectedLessonsIndex(currentLessons, selectedLessonId);
   const completedLessons = selectedArea ? academyProgression.getCompleted(selectedArea) : [];
+  const completedTutorials = academyProgression.getCompletedTutorials();
+
+  const activeTutorialLesson =
+    CHESS_ACADEMY_LESSONS.find((lesson) => lesson.id === tutorialLessonId) || CHESS_ACADEMY_LESSONS[0];
+  const activeTutorialCategory = activeTutorialLesson.category;
+  const lessonsInTutorialCategory = CHESS_ACADEMY_LESSONS.filter(
+    (lesson) => lesson.category === activeTutorialCategory
+  );
+  const activeTutorialIndexInCategory = lessonsInTutorialCategory.findIndex(
+    (lesson) => lesson.id === activeTutorialLesson.id
+  );
+  const nextTutorialLesson =
+    activeTutorialIndexInCategory >= 0
+      ? lessonsInTutorialCategory[activeTutorialIndexInCategory + 1]
+      : undefined;
+  const totalTutorialSteps = activeTutorialLesson.steps.length;
+  const isTutorialFinished = tutorialStepIndex >= totalTutorialSteps;
+  const currentTutorialStep =
+    tutorialStepIndex > 0 ? activeTutorialLesson.steps[tutorialStepIndex - 1] : null;
+  const nextTutorialStep =
+    tutorialStepIndex < totalTutorialSteps ? activeTutorialLesson.steps[tutorialStepIndex] : null;
 
   useEffect(() => {
-    if (view !== 'puzzle') return;
+    const unsubscribe = academyProgression.subscribe(() => {
+      setProgressVersion((version) => version + 1);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (view !== 'puzzle' && view !== 'tutorial') return;
     document.body.classList.add('academy-puzzle-active');
     return () => document.body.classList.remove('academy-puzzle-active');
   }, [view]);
 
   useEffect(() => {
     panelRef.current?.scrollTo({ top: 0 });
-  }, [view, selectedArea, selectedLessonId]);
+  }, [view, selectedArea, selectedLessonId, tutorialLessonId]);
 
   useEffect(() => {
     if (feedback !== 'solved' || !puzzleId) return;
@@ -71,6 +124,8 @@ export function Academy({
       if (event.key !== 'Escape') return;
       if (view === 'puzzle') {
         onLeavePuzzle();
+      } else if (view === 'tutorial') {
+        onLeaveTutorial();
       } else if (selectedLessonId) {
         setSelectedLessonId(null);
         setSelectedAnswer(null);
@@ -83,7 +138,7 @@ export function Academy({
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [onClose, onLeavePuzzle, selectedArea, selectedLessonId, view]);
+  }, [onClose, onLeavePuzzle, onLeaveTutorial, selectedArea, selectedLessonId, view]);
 
   const openLesson = (id: string) => {
     setSelectedLessonId(id);
@@ -119,6 +174,8 @@ export function Academy({
   const goBack = () => {
     if (view === 'puzzle') {
       onLeavePuzzle();
+    } else if (view === 'tutorial') {
+      onLeaveTutorial();
     } else if (selectedLessonId) {
       setSelectedLessonId(null);
       setSelectedAnswer(null);
@@ -130,11 +187,20 @@ export function Academy({
     }
   };
 
-  const title = view === 'puzzle' ? 'Zagonetka' : selectedLesson?.title || (selectedArea ? ACADEMY_AREAS.find((area) => area.id === selectedArea)?.title : 'Šahovska akademija');
+  const isBoardDockMode = view === 'puzzle' || view === 'tutorial';
+  const title =
+    view === 'puzzle'
+      ? 'Zagonetka'
+      : view === 'tutorial'
+        ? activeTutorialLesson.name
+        : selectedLesson?.title ||
+          (selectedArea
+            ? ACADEMY_AREAS.find((area) => area.id === selectedArea)?.title
+            : 'Šahovska akademija');
 
   return (
     <div
-      className={`academy-backdrop ${view === 'puzzle' ? 'puzzle-mode' : ''}`}
+      className={`academy-backdrop ${isBoardDockMode ? 'puzzle-mode' : ''}`}
       role="dialog"
       aria-modal={view === 'home'}
       aria-labelledby="academy-title"
@@ -142,11 +208,18 @@ export function Academy({
       <section className="academy-panel" ref={panelRef}>
         <header className="academy-header">
           <div>
-            <p className="academy-eyebrow">WIZARD CHESS • UČIONICA</p>
+            <p className="academy-eyebrow">
+              {view === 'tutorial' ? 'MENTOR ALISTAIR • 3D TUTORIJAL' : 'WIZARD CHESS • UČIONICA'}
+            </p>
             <h1 id="academy-title">{title}</h1>
           </div>
-          <button type="button" className="academy-close" onClick={goBack} aria-label={view === 'puzzle' || selectedArea ? 'Nazad' : 'Nazad u partiju'}>
-            {view === 'puzzle' || selectedArea ? '←' : '✕'}
+          <button
+            type="button"
+            className="academy-close"
+            onClick={goBack}
+            aria-label={isBoardDockMode || selectedArea ? 'Nazad' : 'Nazad u partiju'}
+          >
+            {isBoardDockMode || selectedArea ? '←' : '✕'}
           </button>
         </header>
 
@@ -202,14 +275,203 @@ export function Academy({
               <button type="button" className="academy-secondary-button" onClick={onLeavePuzzle}>Nazad na zagonetke</button>
             </div>
           </div>
+        ) : view === 'tutorial' ? (
+          <div className="academy-tutorial-content">
+            <div className="academy-tutorial-tabs" role="tablist" aria-label="Kategorije 3D tutorijala">
+              {ACADEMY_TUTORIAL_CATEGORIES.map((category) => {
+                const isActive = category.id === activeTutorialCategory;
+                return (
+                  <button
+                    key={category.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    className={`academy-tutorial-tab ${isActive ? 'active' : ''}`}
+                    disabled={tutorialAnimating}
+                    onClick={() => {
+                      const firstInCat = CHESS_ACADEMY_LESSONS.find(
+                        (item) => item.category === category.id
+                      );
+                      if (firstInCat) onSelectTutorialLesson(firstInCat.id);
+                    }}
+                  >
+                    {category.shortLabel}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="academy-tutorial-picker">
+              <label className="academy-tutorial-label" htmlFor="academy-tutorial-select">
+                Izabrana lekcija
+              </label>
+              <select
+                id="academy-tutorial-select"
+                className="academy-tutorial-select"
+                value={activeTutorialLesson.id}
+                disabled={tutorialAnimating}
+                onChange={(e) => onSelectTutorialLesson(e.target.value)}
+              >
+                {lessonsInTutorialCategory.map((lesson) => {
+                  const isDone = completedTutorials.includes(lesson.id);
+                  return (
+                    <option key={lesson.id} value={lesson.id}>
+                      {lesson.name} ({lesson.badge}){isDone ? ' ✓' : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            <div className="academy-tutorial-meta">
+              <span>
+                {activeTutorialLesson.badge} · {activeTutorialLesson.difficulty} ·{' '}
+                {activeTutorialLesson.category === 'Odbrana' ? 'Crni pogled' : 'Beli pogled'}
+              </span>
+              <span className="academy-tutorial-counter">
+                Korak {tutorialStepIndex} / {totalTutorialSteps}
+              </span>
+            </div>
+
+            <article className="academy-tutorial-card" aria-live="polite">
+              <div className="academy-tutorial-step-code">
+                {currentTutorialStep
+                  ? `Potez ${currentTutorialStep.moveNumber}`
+                  : 'POČETNA POZICIJA'}
+              </div>
+              <h2>
+                {currentTutorialStep
+                  ? currentTutorialStep.title
+                  : activeTutorialLesson.name}
+              </h2>
+              <p>
+                {currentTutorialStep
+                  ? currentTutorialStep.explanation
+                  : activeTutorialLesson.summary}
+              </p>
+              {isTutorialFinished ? (
+                <p className="academy-tutorial-done">
+                  {tutorialGameOver
+                    ? 'Lekcija je završena šah-matom. Klikni „Ispočetka“ za ponovni pregled ili izaberi sledeću lekciju.'
+                    : 'Svi potezi lekcije su prikazani ✓. Možeš odmah preuzeti partiju odavde ili preći na sledeću lekciju.'}
+                </p>
+              ) : nextTutorialStep ? (
+                <p className="academy-tutorial-next-hint">
+                  Sledeći potez: <strong>{nextTutorialStep.moveNumber}</strong>
+                </p>
+              ) : null}
+            </article>
+
+            <div className="academy-actions">
+              {!isTutorialFinished ? (
+                <button
+                  type="button"
+                  id="btn-tutorial-next-step"
+                  className="academy-primary-compact"
+                  disabled={tutorialAnimating}
+                  onClick={onPlayTutorialStep}
+                >
+                  {tutorialAnimating
+                    ? 'Animacija poteza...'
+                    : tutorialStepIndex === 0
+                      ? 'Pokreni 1. potez →'
+                      : 'Sledeći potez →'}
+                </button>
+              ) : nextTutorialLesson ? (
+                <button
+                  type="button"
+                  id="btn-tutorial-next-lesson"
+                  className="academy-primary-compact"
+                  disabled={tutorialAnimating}
+                  onClick={() => onSelectTutorialLesson(nextTutorialLesson.id)}
+                >
+                  Sledeća lekcija →
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                id="btn-tutorial-reset"
+                className="academy-secondary-button"
+                disabled={tutorialStepIndex === 0 || tutorialAnimating}
+                onClick={onResetTutorialLesson}
+              >
+                ↺ Ispočetka
+              </button>
+
+              <button
+                type="button"
+                id="btn-tutorial-takeover"
+                className="academy-takeover-button"
+                disabled={tutorialAnimating || tutorialGameOver}
+                title={
+                  tutorialGameOver
+                    ? 'Partija je već završena matom na tabli'
+                    : 'Preuzmi ovu poziciju i nastavi partiju protiv AI protivnika'
+                }
+                onClick={onTakeOverTutorial}
+              >
+                ⚔ Igraj odavde
+              </button>
+
+              <button
+                type="button"
+                className="academy-secondary-button"
+                disabled={tutorialAnimating}
+                onClick={onLeaveTutorial}
+              >
+                Nazad
+              </button>
+            </div>
+          </div>
         ) : !selectedArea ? (
           <>
             <p className="academy-intro">
-              Uči kroz kratke izazove. Pogrešan pokušaj je deo vežbe — tabla i tvoja partija su na sigurnom.
+              Uči kroz kratke izazove i interaktivne 3D poteze na tabli. Pogrešan pokušaj je deo vežbe — tvoja partija ostaje sačuvana.
             </p>
             <div className="academy-progress-summary">
               Završeno: {academyProgression.getTotalCompleted()} aktivnosti
             </div>
+
+            <section className="academy-mentor-feature" aria-labelledby="academy-mentor-heading">
+              <div className="academy-mentor-header">
+                <div>
+                  <p className="academy-eyebrow">3D MENTOR ALISTAIR</p>
+                  <h2 id="academy-mentor-heading">Interaktivni 3D Tutorijal (30 lekcija)</h2>
+                </div>
+                <span className="academy-mentor-progress">
+                  {completedTutorials.length}/{CHESS_ACADEMY_LESSONS.length}
+                </span>
+              </div>
+              <p className="academy-mentor-desc">
+                Pokreni poteze korak po korak direktno na 3D tabli uz komentare mentora i nastavi borbu iz bilo koje pozicije.
+              </p>
+              <div className="academy-mentor-cats">
+                {ACADEMY_TUTORIAL_CATEGORIES.map((category) => {
+                  const catLessons = CHESS_ACADEMY_LESSONS.filter(
+                    (item) => item.category === category.id
+                  );
+                  const catDone = catLessons.filter((item) =>
+                    completedTutorials.includes(item.id)
+                  ).length;
+                  return (
+                    <button
+                      key={category.id}
+                      type="button"
+                      className="academy-mentor-cat-btn"
+                      onClick={() => onOpenTutorial(category.id)}
+                    >
+                      <div className="academy-mentor-cat-top">
+                        <strong>{category.label}</strong>
+                        <span>{catDone}/{catLessons.length}</span>
+                      </div>
+                      <p>{category.description}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
             <div className="academy-area-grid">
               {ACADEMY_AREAS.map((area) => {
                 const count = area.id === 'puzzles'

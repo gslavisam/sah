@@ -449,10 +449,11 @@ async function startServer() {
         model: 'gemini-3.1-flash-lite',
         contents: prompt,
         config: {
+          maxOutputTokens: 120,
           thinkingConfig: {
             thinkingLevel: ThinkingLevel.MINIMAL,
           },
-          abortSignal: AbortSignal.timeout(4500),
+          abortSignal: AbortSignal.timeout(3500),
         },
       });
       res.json({ text: response?.text?.trim() || null, configured: true });

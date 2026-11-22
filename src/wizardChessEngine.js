@@ -5,8 +5,9 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { createSceneEnvironments } from './services/sceneEnvironments';
 import { SCENE_THEMES } from './services/sceneThemes';
 import { createOpponentHologramSystem } from './services/opponentHolograms';
-import { boardToFen } from './shared/chessRules';
+import { boardToFen, DEFAULT_START_FEN, parseFenPosition, squareToCoords } from './shared/chessRules';
 import { stockfishService } from './services/stockfishService';
+import { createOutdoorParkEnvironment } from './three/environments/outdoorParkEnv';
 
 /** @type {any} */
 const THREE = THREE_NS;
@@ -80,6 +81,8 @@ export function initWizardChess() {
     const opponentHologram = createOpponentHologramSystem();
     scene.add(opponentHologram.group);
     let cathedralRoot = null;
+    let ambienceMode = 'cathedral';
+    let outdoorParkEnv = null;
 
     // Self-contained Cathedral PMREM Environment (inspired by three-gpu-pathtracer & realism-effects)
     function createCathedralPMREMEnvironment(glRenderer) {
@@ -88,10 +91,12 @@ export function initWizardChess() {
       const envScene = new THREE.Scene();
       envScene.background = new THREE.Color(0x161412);
       const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+      const tempMats = [];
       const addPanel = (colorHex, intensity, pos, scl) => {
         const mat = new THREE.MeshBasicMaterial({
           color: new THREE.Color(colorHex).multiplyScalar(intensity)
         });
+        tempMats.push(mat);
         const m = new THREE.Mesh(boxGeo, mat);
         m.position.fromArray(pos);
         m.scale.fromArray(scl);
@@ -108,11 +113,44 @@ export function initWizardChess() {
       addPanel(0x6e5c49, 0.9, [0, -4.0, 0.0], [16.0, 1.0, 24.0]);
       const envTex = pmremGen.fromScene(envScene, 0.04).texture;
       boxGeo.dispose();
+      for (const m of tempMats) m.dispose();
       pmremGen.dispose();
       return envTex;
     }
 
-    scene.environment = createCathedralPMREMEnvironment(renderer);
+    function createParkPMREMEnvironment(glRenderer) {
+      const pmremGen = new THREE.PMREMGenerator(glRenderer);
+      pmremGen.compileEquirectangularShader();
+      const envScene = new THREE.Scene();
+      envScene.background = new THREE.Color(0xc5e1f7);
+      const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+      const tempMats = [];
+      const addPanel = (colorHex, intensity, pos, scl) => {
+        const mat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(colorHex).multiplyScalar(intensity)
+        });
+        tempMats.push(mat);
+        const m = new THREE.Mesh(boxGeo, mat);
+        m.position.fromArray(pos);
+        m.scale.fromArray(scl);
+        envScene.add(m);
+      };
+      // Bright Central Park afternoon sky dome, warm sun patch, surrounding trees & stone ground bounce
+      addPanel(0x9ecbf0, 1.9, [0, 12.0, 0], [28.0, 1.0, 28.0]);
+      addPanel(0xfff3d6, 2.8, [10.0, 9.0, 7.0], [6.0, 4.0, 6.0]);
+      addPanel(0xdceeff, 1.4, [0, 3.0, -14.0], [24.0, 6.0, 1.2]);
+      addPanel(0xdceeff, 1.4, [0, 3.0, 14.0], [24.0, 6.0, 1.2]);
+      addPanel(0x6b855e, 1.0, [0, -5.0, 0], [26.0, 1.0, 26.0]);
+      const envTex = pmremGen.fromScene(envScene, 0.04).texture;
+      boxGeo.dispose();
+      for (const m of tempMats) m.dispose();
+      pmremGen.dispose();
+      return envTex;
+    }
+
+    const cathedralEnvMap = createCathedralPMREMEnvironment(renderer);
+    let parkEnvMap = null;
+    scene.environment = cathedralEnvMap;
     if ('environmentIntensity' in scene) {
       scene.environmentIntensity = 0.24;
     }
@@ -280,6 +318,14 @@ export function initWizardChess() {
         if (themeId !== 'mentor') setSceneTheme('mentor');
         return false;
       }
+      activeSceneTheme = themeId;
+      opponentHologram.setPersona(themeId);
+
+      // In Central Park Zen mode, remember persona choice without resurrecting cathedral props/lighting
+      if (ambienceMode === 'park') {
+        return true;
+      }
+
       for (const [id, group] of Object.entries(sceneThemeGroups)) {
         group.visible = id === themeId;
       }
@@ -312,8 +358,6 @@ export function initWizardChess() {
         material.needsUpdate = true;
       }
 
-      activeSceneTheme = themeId;
-      opponentHologram.setPersona(themeId);
       renderer.shadowMap.needsUpdate = true;
       return true;
     }
@@ -412,6 +456,13 @@ export function initWizardChess() {
     ];
 
     function clampPointToCathedralRoom(pt, isTarget = false) {
+      if (ambienceMode === 'park') {
+        pt.x = Math.max(-22.0, Math.min(22.0, pt.x));
+        pt.z = Math.max(-22.0, Math.min(22.0, pt.z));
+        const localMinY = isTarget ? 0.20 : 0.35;
+        pt.y = Math.max(localMinY, Math.min(16.0, pt.y));
+        return;
+      }
       const margin = isTarget ? 0.15 : 0.0;
       pt.x = Math.max(CATHEDRAL_BOUNDS.minX - margin, Math.min(CATHEDRAL_BOUNDS.maxX + margin, pt.x));
       pt.z = Math.max(CATHEDRAL_BOUNDS.minZ - margin, Math.min(CATHEDRAL_BOUNDS.maxZ + margin, pt.z));
@@ -443,54 +494,56 @@ export function initWizardChess() {
       const moveLen = Math.sqrt(moveLenSq);
       const isContinuousStep = Boolean(prevPos) && moveLen > 1e-5 && moveLen < 8.0;
 
-      for (const p of CATHEDRAL_SOLID_PILLARS) {
-        if (curPos.y > p.maxY) continue;
+      if (ambienceMode !== 'park') {
+        for (const p of CATHEDRAL_SOLID_PILLARS) {
+          if (curPos.y > p.maxY) continue;
 
-        let tClosest = 1.0;
-        if (isContinuousStep) {
-          tClosest = ((p.x - x0) * moveDx + (p.z - z0) * moveDz) / moveLenSq;
-          tClosest = Math.max(0.0, Math.min(1.0, tClosest));
-        }
-        const cxSeg = x0 + moveDx * tClosest;
-        const czSeg = z0 + moveDz * tClosest;
-        const dSeg = isContinuousStep ? Math.hypot(cxSeg - p.x, czSeg - p.z) : Infinity;
-        const dEnd = Math.hypot(x1 - p.x, z1 - p.z);
-
-        if (dSeg < p.r || dEnd < p.r) {
-          if (typeof window.__wizardChessTelemetry === 'object' && window.__wizardChessTelemetry && p.isColumn) {
-            window.__wizardChessTelemetry.columnDeflections = (window.__wizardChessTelemetry.columnDeflections || 0) + 1;
-          }
-
+          let tClosest = 1.0;
           if (isContinuousStep) {
-            // Smooth tangential circumferential slide around the column
-            const startAng = Math.atan2(z0 - p.z, x0 - p.x);
-            const endAng = Math.atan2(z1 - p.z, x1 - p.x);
-            let deltaAng = endAng - startAng;
-            while (deltaAng > Math.PI) deltaAng -= Math.PI * 2;
-            while (deltaAng < -Math.PI) deltaAng += Math.PI * 2;
+            tClosest = ((p.x - x0) * moveDx + (p.z - z0) * moveDz) / moveLenSq;
+            tClosest = Math.max(0.0, Math.min(1.0, tClosest));
+          }
+          const cxSeg = x0 + moveDx * tClosest;
+          const czSeg = z0 + moveDz * tClosest;
+          const dSeg = isContinuousStep ? Math.hypot(cxSeg - p.x, czSeg - p.z) : Infinity;
+          const dEnd = Math.hypot(x1 - p.x, z1 - p.z);
 
-            // Project step onto unit tangent at startAng; if pushing dead-on into column center, bias toward center aisle
-            const tanX = -Math.sin(startAng);
-            const tanZ = Math.cos(startAng);
-            let tangMove = moveDx * tanX + moveDz * tanZ;
-            if (Math.abs(tangMove) < moveLen * 0.18) {
-              const aisleSign = (p.x >= 0 ? -1 : 1) * Math.sign(moveDz || 1);
-              tangMove = (tangMove >= 0 ? 1 : aisleSign || 1) * moveLen * 0.65;
+          if (dSeg < p.r || dEnd < p.r) {
+            if (typeof window.__wizardChessTelemetry === 'object' && window.__wizardChessTelemetry && p.isColumn) {
+              window.__wizardChessTelemetry.columnDeflections = (window.__wizardChessTelemetry.columnDeflections || 0) + 1;
             }
-            const arcStep = Math.sign(deltaAng || tangMove || 1) * Math.max(Math.abs(deltaAng), Math.min(Math.PI * 0.35, Math.abs(tangMove) / p.r));
-            const newAng = startAng + arcStep;
-            x1 = p.x + Math.cos(newAng) * p.r;
-            z1 = p.z + Math.sin(newAng) * p.r;
-          } else {
-            const radX = x1 - p.x;
-            const radZ = z1 - p.z;
-            const radLen = Math.hypot(radX, radZ);
-            if (radLen > 1e-4) {
-              x1 = p.x + (radX / radLen) * p.r;
-              z1 = p.z + (radZ / radLen) * p.r;
+
+            if (isContinuousStep) {
+              // Smooth tangential circumferential slide around the column
+              const startAng = Math.atan2(z0 - p.z, x0 - p.x);
+              const endAng = Math.atan2(z1 - p.z, x1 - p.x);
+              let deltaAng = endAng - startAng;
+              while (deltaAng > Math.PI) deltaAng -= Math.PI * 2;
+              while (deltaAng < -Math.PI) deltaAng += Math.PI * 2;
+
+              // Project step onto unit tangent at startAng; if pushing dead-on into column center, bias toward center aisle
+              const tanX = -Math.sin(startAng);
+              const tanZ = Math.cos(startAng);
+              let tangMove = moveDx * tanX + moveDz * tanZ;
+              if (Math.abs(tangMove) < moveLen * 0.18) {
+                const aisleSign = (p.x >= 0 ? -1 : 1) * Math.sign(moveDz || 1);
+                tangMove = (tangMove >= 0 ? 1 : aisleSign || 1) * moveLen * 0.65;
+              }
+              const arcStep = Math.sign(deltaAng || tangMove || 1) * Math.max(Math.abs(deltaAng), Math.min(Math.PI * 0.35, Math.abs(tangMove) / p.r));
+              const newAng = startAng + arcStep;
+              x1 = p.x + Math.cos(newAng) * p.r;
+              z1 = p.z + Math.sin(newAng) * p.r;
             } else {
-              x1 = p.x + (p.x >= 0 ? -p.r : p.r);
-              z1 = p.z;
+              const radX = x1 - p.x;
+              const radZ = z1 - p.z;
+              const radLen = Math.hypot(radX, radZ);
+              if (radLen > 1e-4) {
+                x1 = p.x + (radX / radLen) * p.r;
+                z1 = p.z + (radZ / radLen) * p.r;
+              } else {
+                x1 = p.x + (p.x >= 0 ? -p.r : p.r);
+                z1 = p.z;
+              }
             }
           }
         }
@@ -878,20 +931,27 @@ export function initWizardChess() {
 
     // Consolidated Window Point Lights (4 side-aisle + 2 end-wall lights instead of 22 separate PointLights;
     // fine local window & column raking relief is evaluated analytically in applyCathedralStoneRealismShader)
+    const cathedralWindowLights = [];
     for (const wz of [-8.8, 8.2]) {
       for (const sideSign of [-1, 1]) {
         const winLight = new THREE.PointLight(0x90beff, 4.2, 16.5, 1.35);
         winLight.position.set(sideSign * 5.3, 4.1, wz);
+        winLight.userData.baseIntensity = 4.2;
         scene.add(winLight);
+        cathedralWindowLights.push(winLight);
       }
     }
     const northWinLight = new THREE.PointLight(0x9bc4ff, 6.4, 20.0, 1.30);
     northWinLight.position.set(0, 5.2, -18.2);
+    northWinLight.userData.baseIntensity = 6.4;
     scene.add(northWinLight);
+    cathedralWindowLights.push(northWinLight);
 
     const southWinLight = new THREE.PointLight(0xffb85c, 6.4, 20.0, 1.30);
     southWinLight.position.set(0, 5.2, 18.2);
+    southWinLight.userData.baseIntensity = 6.4;
     scene.add(southWinLight);
+    cathedralWindowLights.push(southWinLight);
 
     // Impact Flash Light (kept visible=true with intensity=0 when idle so Three.js never recompiles shaders mid-attack!)
     const impactFlashLight = new THREE.PointLight(0xffb74d, 0, 6.0, 1.5);
@@ -1044,20 +1104,24 @@ export function initWizardChess() {
     selectedPieceAura.visible = false;
     scene.add(selectedPieceAura);
     const boardSquareMeshes = [];
+    let lightSqMat = null;
+    let darkSqMat = null;
+    let boardRimMat = null;
 
     function buildChessBoardGrid() {
       const tileH = 0.036;
       const sqGeo = new THREE.BoxGeometry(BOARD_SQ_SIZE * 0.985, tileH, BOARD_SQ_SIZE * 0.985);
-      const lightSqMat = new THREE.MeshStandardMaterial({
+      lightSqMat = new THREE.MeshStandardMaterial({
         color: 0xdcd3c2,
         roughness: 0.38,
         metalness: 0.06
       });
-      const darkSqMat = new THREE.MeshStandardMaterial({
+      darkSqMat = new THREE.MeshStandardMaterial({
         color: 0x14171f,
         roughness: 0.28,
         metalness: 0.18
       });
+      boardRimMat = goldTrimMat.clone();
 
       for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
@@ -1072,19 +1136,19 @@ export function initWizardChess() {
         }
       }
 
-      // Sculpted Golden Border Frame around the 8x8 tiles on top of the Obsidian Altar
+      // Sculpted Border Frame around the 8x8 tiles (uses dedicated boardRimMat so piece goldTrimMat stays gold)
       const halfB = 4.0 * BOARD_SQ_SIZE;
       const rimW = 0.06;
       const rimH = 0.042;
       const horizGeo = new THREE.BoxGeometry(halfB * 2 + rimW * 2, rimH, rimW);
       const vertGeo = new THREE.BoxGeometry(rimW, rimH, halfB * 2);
       for (const s of [-1, 1]) {
-        const hBar = new THREE.Mesh(horizGeo, goldTrimMat);
+        const hBar = new THREE.Mesh(horizGeo, boardRimMat);
         hBar.position.set(0, BOARD_SURFACE_Y - rimH * 0.45, s * (halfB + rimW * 0.5));
         hBar.receiveShadow = true;
         boardGroup.add(hBar);
 
-        const vBar = new THREE.Mesh(vertGeo, goldTrimMat);
+        const vBar = new THREE.Mesh(vertGeo, boardRimMat);
         vBar.position.set(s * (halfB + rimW * 0.5), BOARD_SURFACE_Y - rimH * 0.45, 0);
         vBar.receiveShadow = true;
         boardGroup.add(vBar);
@@ -1610,7 +1674,11 @@ export function initWizardChess() {
             setWallStoneLook(0);
             setFloorStoneLook(0);
             scene.add(cathedralRoot);
-            setSceneTheme(activeSceneTheme || 'mentor');
+            if (ambienceMode === 'park') {
+              setAmbienceMode('park');
+            } else {
+              setSceneTheme(activeSceneTheme || 'mentor');
+            }
 
             bumpProgress('Arhitektura katedrale učitana...');
             resolve();
@@ -1700,6 +1768,7 @@ export function initWizardChess() {
     let aiDifficulty = 'easy';
     let aiTimer = null;
     let academyMode = false;
+    let academyTutorialMode = false;
     let academySavedState = null;
 
     // Camera Animation & Telemetry State
@@ -2641,6 +2710,7 @@ export function initWizardChess() {
         console.warn('Cannot load academy position: invalid pieces or turn.');
         return false;
       }
+      academyTutorialMode = false;
       aiSearchEpoch += 1;
       isSearchingAIMove = false;
       stockfishService.cancelPending();
@@ -2675,6 +2745,219 @@ export function initWizardChess() {
       return true;
     }
 
+    function setAcademyFenPosition(fen, options = {}) {
+      if (!academyMode) return false;
+      const parsed = parseFenPosition(fen || DEFAULT_START_FEN);
+      if (!parsed) {
+        console.warn('Cannot load academy FEN position: invalid FEN.');
+        return false;
+      }
+      academyTutorialMode = true;
+      aiSearchEpoch += 1;
+      isSearchingAIMove = false;
+      stockfishService.cancelPending();
+      if (aiTimer) {
+        clearTimeout(aiTimer);
+        aiTimer = null;
+      }
+      activeMoveTweens.length = 0;
+      clearCheckmateSequence();
+      clearSquareHighlights();
+      clearHintHighlight();
+      clearAllPieces();
+      selectedSquare = null;
+      validMoves = [];
+      isAnimatingMove = false;
+
+      currentTurn = parsed.currentTurn;
+      enPassantTarget = parsed.enPassantTarget ? { ...parsed.enPassantTarget } : null;
+      halfMoveClock = parsed.halfMoveClock;
+      positionHistory = Array.isArray(parsed.positionHistory) ? parsed.positionHistory.slice() : [];
+      gameOver = Boolean(parsed.gameOver);
+      drawReason = parsed.drawReason || null;
+      moveHistory = [];
+
+      let whiteCount = 0;
+      let blackCount = 0;
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const cell = parsed.board[r][c];
+          if (cell) {
+            const inst = instantiatePiece(cell.type, cell.color, r, c);
+            inst.hasMoved = Boolean(cell.hasMoved);
+            boardState[r][c] = inst;
+            if (cell.color === 'w') whiteCount += 1;
+            else blackCount += 1;
+          }
+        }
+      }
+      capturedByWhite = Math.max(0, 16 - blackCount);
+      capturedByBlack = Math.max(0, 16 - whiteCount);
+
+      const viewSide = options.viewSide === 'b' ? 'b' : 'w';
+      playerColor = viewSide;
+      playerCamSide = viewSide;
+      primaryCameraView = 'player';
+      setActiveCamButton('btn-camera-view');
+      notifyPrimaryCameraView();
+      setCameraForSide(viewSide, Boolean(options.immediateCamera));
+
+      renderer.shadowMap.needsUpdate = true;
+      updateTurnUI();
+      return true;
+    }
+
+    function syncOpponentHologramVisibility() {
+      opponentHologram.setModeVisible(!is2DModeActive && !academyMode && ambienceMode !== 'park');
+    }
+
+    function setAmbienceMode(mode) {
+      const targetMode = mode === 'park' ? 'park' : 'cathedral';
+      ambienceMode = targetMode;
+
+      if (targetMode === 'park') {
+        if (!outdoorParkEnv) {
+          outdoorParkEnv = createOutdoorParkEnvironment(scene, {
+            boardSurfaceY: BOARD_SURFACE_Y,
+            boardHalfWidth: 4.0 * BOARD_SQ_SIZE,
+            maxAnisotropy: renderer.capabilities.getMaxAnisotropy()
+          });
+          scene.add(outdoorParkEnv.group);
+        }
+        outdoorParkEnv.group.visible = true;
+
+        if (cathedralRoot) cathedralRoot.visible = false;
+        for (const group of Object.values(sceneThemeGroups)) {
+          group.visible = false;
+        }
+        for (const sp of brazierGlowSprites) {
+          sp.visible = false;
+        }
+        for (const light of brazierLights) {
+          light.intensity = 0;
+        }
+        for (const wLight of cathedralWindowLights) {
+          wLight.intensity = 0;
+        }
+
+        if (!parkEnvMap) {
+          parkEnvMap = createParkPMREMEnvironment(renderer);
+        }
+        scene.environment = parkEnvMap;
+        if ('environmentIntensity' in scene) {
+          scene.environmentIntensity = 0.55;
+        }
+        renderer.toneMappingExposure = 1.08;
+
+        scene.background = new THREE.Color('#cbe4f9');
+        scene.fog = new THREE.FogExp2('#d8e8f5', 0.011);
+
+        hemiLight.color.set('#cce6fc');
+        hemiLight.groundColor.set('#7a8e6c');
+        hemiLight.intensity = 1.15;
+
+        keyLight.color.set('#fff3db');
+        keyLight.intensity = 2.25;
+        keyLight.position.set(11, 16, 8);
+        keyLight.shadow.camera.near = 1.0;
+        keyLight.shadow.camera.far = 48.0;
+        const dPark = 10.5;
+        keyLight.shadow.camera.left = -dPark;
+        keyLight.shadow.camera.right = dPark;
+        keyLight.shadow.camera.top = dPark;
+        keyLight.shadow.camera.bottom = -dPark;
+        keyLight.shadow.camera.updateProjectionMatrix();
+
+        rimLight.color.set('#d9ecff');
+        rimLight.intensity = 0.45;
+        southFillLight.color.set('#fff4dc');
+        southFillLight.intensity = 0.4;
+
+        camera.far = 95;
+        camera.updateProjectionMatrix();
+
+        if (lightSqMat) {
+          lightSqMat.color.setHex(0xeceef2);
+          lightSqMat.roughness = 0.62;
+          lightSqMat.metalness = 0.02;
+        }
+        if (darkSqMat) {
+          darkSqMat.color.setHex(0x181b20);
+          darkSqMat.roughness = 0.58;
+          darkSqMat.metalness = 0.06;
+        }
+        if (boardRimMat) {
+          boardRimMat.color.setHex(0x686e78);
+          boardRimMat.roughness = 0.74;
+          boardRimMat.metalness = 0.06;
+        }
+
+        syncOpponentHologramVisibility();
+        enforceCathedralBoundsAndSolidColumns(null, camera.position, orbitControls.target);
+        renderer.shadowMap.needsUpdate = true;
+        return 'park';
+      }
+
+      // Restore Gothic Cathedral Duel environment
+      if (outdoorParkEnv) {
+        outdoorParkEnv.group.visible = false;
+      }
+      if (cathedralRoot) cathedralRoot.visible = true;
+      for (const sp of brazierGlowSprites) {
+        sp.visible = true;
+      }
+      for (const wLight of cathedralWindowLights) {
+        wLight.intensity = wLight.userData.baseIntensity || 4.2;
+      }
+
+      scene.environment = cathedralEnvMap;
+      if ('environmentIntensity' in scene) {
+        scene.environmentIntensity = 0.24;
+      }
+      renderer.toneMappingExposure = 1.24;
+
+      keyLight.position.set(3.8, 8.5, 4.2);
+      keyLight.shadow.camera.near = 1.0;
+      keyLight.shadow.camera.far = 22.0;
+      const dCath = 3.2;
+      keyLight.shadow.camera.left = -dCath;
+      keyLight.shadow.camera.right = dCath;
+      keyLight.shadow.camera.top = dCath;
+      keyLight.shadow.camera.bottom = -dCath;
+      keyLight.shadow.camera.updateProjectionMatrix();
+
+      camera.far = 65;
+      camera.updateProjectionMatrix();
+
+      if (lightSqMat) {
+        lightSqMat.color.setHex(0xdcd3c2);
+        lightSqMat.roughness = 0.38;
+        lightSqMat.metalness = 0.06;
+      }
+      if (darkSqMat) {
+        darkSqMat.color.setHex(0x14171f);
+        darkSqMat.roughness = 0.28;
+        darkSqMat.metalness = 0.18;
+      }
+      if (boardRimMat) {
+        boardRimMat.color.copy(goldTrimMat.color);
+        boardRimMat.roughness = goldTrimMat.roughness;
+        boardRimMat.metalness = goldTrimMat.metalness;
+      }
+
+      scene.background = new THREE.Color(0x070a12);
+      scene.fog = new THREE.FogExp2(0x080b14, 0.015);
+      setSceneTheme(activeSceneTheme || 'mentor');
+      syncOpponentHologramVisibility();
+      enforceCathedralBoundsAndSolidColumns(null, camera.position, orbitControls.target);
+      renderer.shadowMap.needsUpdate = true;
+      return 'cathedral';
+    }
+
+    function getAmbienceMode() {
+      return ambienceMode;
+    }
+
     function enterAcademy(pieces, turn) {
       if (academyMode || !isValidAcademyPosition(pieces, turn)) {
         console.warn('Cannot enter academy: already active or position is invalid.');
@@ -2696,8 +2979,83 @@ export function initWizardChess() {
         aiAutoPlay
       };
       academyMode = true;
-      opponentHologram.setModeVisible(false);
+      syncOpponentHologramVisibility();
       return setAcademyPosition(pieces, turn);
+    }
+
+    function enterAcademyTutorial(fen, options = {}) {
+      const wasInAcademy = academyMode;
+      if (!wasInAcademy) {
+        aiSearchEpoch += 1;
+        isSearchingAIMove = false;
+        stockfishService.cancelPending();
+        completeCurrentMoveImmediately();
+        if (aiTimer) {
+          clearTimeout(aiTimer);
+          aiTimer = null;
+        }
+        academySavedState = {
+          board: captureBoardSnapshot(),
+          moveHistory: moveHistory.slice(),
+          gameMode,
+          playerColor,
+          aiAutoPlay
+        };
+        academyMode = true;
+        syncOpponentHologramVisibility();
+      }
+
+      const ok = setAcademyFenPosition(fen || DEFAULT_START_FEN, options);
+      if (!ok && !wasInAcademy) {
+        academyMode = false;
+        academyTutorialMode = false;
+        academySavedState = null;
+        syncOpponentHologramVisibility();
+        return false;
+      }
+      return ok;
+    }
+
+    function executeTutorialMove(fromSquare, toSquare, promotion) {
+      if (!academyMode || !academyTutorialMode) return false;
+      const fromCoords = squareToCoords(fromSquare);
+      const toCoords = squareToCoords(toSquare);
+      if (!fromCoords || !toCoords) return false;
+      if (isAnimatingMove) {
+        completeCurrentMoveImmediately();
+      }
+      return executeChessMove(fromCoords.r, fromCoords.c, toCoords.r, toCoords.c, {
+        promotion,
+        tutorialStep: true
+      });
+    }
+
+    function takeOverAcademyGame(preferredPlayerColor = 'w') {
+      if (!academyMode) return false;
+      completeCurrentMoveImmediately();
+      academySavedState = null;
+      academyMode = false;
+      academyTutorialMode = false;
+      gameMode = 'single';
+      aiAutoPlay = true;
+      playerColor = preferredPlayerColor === 'b' ? 'b' : 'w';
+      moveHistory = [];
+      if (positionHistory.length === 0) {
+        positionHistory = [computePositionKey()];
+      }
+      opponentHologram.setPlayerSide(playerColor, true);
+      syncOpponentHologramVisibility();
+      opponentHologram.setThinking(false);
+      opponentHologram.triggerReaction('idle');
+      playerCamSide = playerColor;
+      primaryCameraView = 'player';
+      setActiveCamButton('btn-camera-view');
+      notifyPrimaryCameraView();
+      setCameraForSide(playerColor, false);
+      renderer.shadowMap.needsUpdate = true;
+      updateTurnUI();
+      maybeScheduleAIMove();
+      return true;
     }
 
     function exitAcademy() {
@@ -2705,6 +3063,7 @@ export function initWizardChess() {
       const saved = academySavedState;
       academySavedState = null;
       academyMode = false;
+      academyTutorialMode = false;
       gameMode = saved.gameMode;
       playerColor = saved.playerColor;
       aiAutoPlay = saved.aiAutoPlay;
@@ -2714,8 +3073,13 @@ export function initWizardChess() {
         return false;
       }
       moveHistory = saved.moveHistory;
+      playerCamSide = playerColor;
+      primaryCameraView = 'player';
+      setActiveCamButton('btn-camera-view');
+      notifyPrimaryCameraView();
+      setCameraForSide(playerColor, false);
       opponentHologram.setPlayerSide(playerColor, true);
-      opponentHologram.setModeVisible(!is2DModeActive);
+      syncOpponentHologramVisibility();
       maybeScheduleAIMove();
       return true;
     }
@@ -2725,7 +3089,7 @@ export function initWizardChess() {
       const enemyAvatar = roomState?.players?.[enemyColor]?.avatar || 'mentor';
       setSceneTheme(enemyAvatar);
       opponentHologram.setPlayerSide(assignedColor, true);
-      opponentHologram.setModeVisible(!is2DModeActive && !academyMode);
+      syncOpponentHologramVisibility();
       opponentHologram.setThinking(false);
     }
 
@@ -2817,6 +3181,7 @@ export function initWizardChess() {
       if (academyMode) {
         academySavedState = null;
         academyMode = false;
+        academyTutorialMode = false;
       }
       if (aiTimer) {
         clearTimeout(aiTimer);
@@ -2946,6 +3311,7 @@ export function initWizardChess() {
 
     function resetChessBoard(orientCamera = true, options = {}) {
       if (gameMode === 'online' && !options.force) return false;
+      academyTutorialMode = false;
       aiSearchEpoch += 1;
       isSearchingAIMove = false;
       stockfishService.newGame();
@@ -3950,7 +4316,7 @@ export function initWizardChess() {
         currentTurn = currentTurn === 'w' ? 'b' : 'w';
         isAnimatingMove = false;
 
-        if (!academyMode) {
+        if (!academyMode || academyTutorialMode) {
           halfMoveClock = piece.type === 'pawn' || isCapture ? 0 : halfMoveClock + 1;
           const posKey = computePositionKey();
           positionHistory.push(posKey);
@@ -3997,7 +4363,8 @@ export function initWizardChess() {
               ? new CustomEvent('wizardchess:academy-move', {
                   detail: {
                     ...moveDetail,
-                    isCheckmate: isMate
+                    isCheckmate: isMate,
+                    tutorialStep: Boolean(options.tutorialStep)
                   }
                 })
               : new CustomEvent('wizardchess:move', { detail: moveDetail })
@@ -5125,7 +5492,9 @@ export function initWizardChess() {
           drawReason = null;
           const winnerLabel = currentTurn === 'w' ? 'Crni' : 'Beli';
           if (turnText) {
-            turnText.textContent = academyMode ? 'Zagonetka završena' : `Šah-mat — ${winnerLabel} pobeđuje`;
+            turnText.textContent = academyMode
+              ? (academyTutorialMode ? 'Tutorijal završen' : 'Zagonetka završena')
+              : `Šah-mat — ${winnerLabel} pobeđuje`;
           }
           if (!academyMode && !is2DModeActive && !checkmateState.active) {
             triggerCheckmateSequence(currentTurn, currentTurn === 'w' ? 'b' : 'w');
@@ -5167,7 +5536,7 @@ export function initWizardChess() {
 
       if (modeBadge) {
         if (academyMode) {
-          modeBadge.textContent = 'Akademija';
+          modeBadge.textContent = academyTutorialMode ? 'Akademija · 3D Tutorijal' : 'Akademija';
         } else if (gameMode === 'online') {
           modeBadge.textContent = `Online Duel • ${playerColor === 'w' ? 'Beli' : 'Crni'}`;
         } else {
@@ -5205,7 +5574,7 @@ export function initWizardChess() {
     renderer.domElement.addEventListener('pointerup', (e) => {
       const moveDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
       if (moveDist > 6) return;
-      if (isAnimatingMove || gameOver || is2DModeActive) return;
+      if (isAnimatingMove || gameOver || is2DModeActive || academyTutorialMode) return;
 
       // Only allow moving the player's own side in single-player games
       if (!academyMode && currentTurn !== playerColor) return;
@@ -5421,7 +5790,7 @@ export function initWizardChess() {
         completeCurrentMoveImmediately();
       }
       is2DModeActive = next;
-      opponentHologram.setModeVisible(!is2DModeActive && !academyMode);
+      syncOpponentHologramVisibility();
       if (!is2DModeActive) {
         renderer.shadowMap.needsUpdate = true;
       }
@@ -5463,6 +5832,8 @@ export function initWizardChess() {
     // =========================================================================
     window.wizardChess = {
       setSceneTheme,
+      setAmbienceMode,
+      getAmbienceMode,
       setPieceSet,
       setAIDifficulty,
       set2DModeActive,
@@ -5489,6 +5860,10 @@ export function initWizardChess() {
       resetChessBoard,
       enterAcademy,
       setAcademyPosition,
+      setAcademyFenPosition,
+      enterAcademyTutorial,
+      executeTutorialMove,
+      takeOverAcademyGame,
       exitAcademy,
       undoPlayerMove,
       enterOnlineMode,
@@ -5935,25 +6310,31 @@ export function initWizardChess() {
         }
       }
 
-      // Advance volumetric GLSL brazier flames & active warm firelight flicker
-      for (let i = 0; i < brazierFireUniforms.length; i++) {
-        brazierFireUniforms[i].uTime.value = elapsedTotal;
-      }
-      for (let i = 0; i < brazierGlowSprites.length; i++) {
-        const sp = brazierGlowSprites[i];
-        const baseOp = sp.userData.baseOpacity || 0.4;
-        const seed = sp.userData.seed || 0;
-        sp.material.opacity =
-          baseOp +
-          Math.sin(elapsedTotal * 5.2 + seed) * 0.045 +
-          Math.cos(elapsedTotal * 8.4 + seed * 1.3) * 0.025;
-      }
-      for (let i = 0; i < brazierLights.length; i++) {
-        const baseInt = brazierLights[i].userData.baseIntensity || 3.2;
-        brazierLights[i].intensity =
-          baseInt +
-          Math.sin(elapsedTotal * 5.6 + i * 1.7) * 0.28 +
-          Math.cos(elapsedTotal * 9.1 + i) * 0.16;
+      // Advance volumetric GLSL brazier flames & active warm firelight flicker (muted in Park Zen mode)
+      if (ambienceMode !== 'park') {
+        for (let i = 0; i < brazierFireUniforms.length; i++) {
+          brazierFireUniforms[i].uTime.value = elapsedTotal;
+        }
+        for (let i = 0; i < brazierGlowSprites.length; i++) {
+          const sp = brazierGlowSprites[i];
+          const baseOp = sp.userData.baseOpacity || 0.4;
+          const seed = sp.userData.seed || 0;
+          sp.material.opacity =
+            baseOp +
+            Math.sin(elapsedTotal * 5.2 + seed) * 0.045 +
+            Math.cos(elapsedTotal * 8.4 + seed * 1.3) * 0.025;
+        }
+        for (let i = 0; i < brazierLights.length; i++) {
+          const baseInt = brazierLights[i].userData.baseIntensity || 3.2;
+          brazierLights[i].intensity =
+            baseInt +
+            Math.sin(elapsedTotal * 5.6 + i * 1.7) * 0.28 +
+            Math.cos(elapsedTotal * 9.1 + i) * 0.16;
+        }
+      } else {
+        for (let i = 0; i < brazierLights.length; i++) {
+          brazierLights[i].intensity = 0;
+        }
       }
 
       if (isAnimatingMove || activeMoveTweens.length > 0 || shatterDebris.length > 0 || checkmateState.active) {

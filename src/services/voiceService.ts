@@ -151,6 +151,7 @@ const CUE_AUDIO_FILES: Record<Exclude<VoiceCue, 'draw'>, Record<PersonaId, strin
 
 class VoiceService {
   private enabled: boolean = true;
+  private mutedByAmbience: boolean = false;
   private currentAudio: HTMLAudioElement | null = null;
   private cueVariantIndex: Record<string, number> = {};
 
@@ -163,6 +164,17 @@ class VoiceService {
 
   public isEnabled(): boolean {
     return this.enabled;
+  }
+
+  public isAmbienceMuted(): boolean {
+    return this.mutedByAmbience;
+  }
+
+  public setAmbienceMuted(muted: boolean): void {
+    this.mutedByAmbience = Boolean(muted);
+    if (this.mutedByAmbience) {
+      this.stop();
+    }
   }
 
   public toggleVoice(): boolean {
@@ -195,7 +207,7 @@ class VoiceService {
   }
 
   public speak(text: string, personaId: PersonaId, voiceCue?: VoiceCue) {
-    if (!this.enabled || typeof window === 'undefined') {
+    if (!this.enabled || this.mutedByAmbience || typeof window === 'undefined') {
       return;
     }
 

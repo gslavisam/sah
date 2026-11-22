@@ -666,6 +666,134 @@ test('Stockfish WASM worker, blunder MP3 cue, hint highlights, and EvalBar fair-
   assert.ok(appTsx.includes('stockfishService.getHintMove('));
 });
 
+test('AI thinking indicator cannot get stuck across StrictMode remounts or stalled requests', () => {
+  const sfService = fs.readFileSync(path.join(ROOT, 'src/services/stockfishService.ts'), 'utf-8');
+  const geminiSrc = fs.readFileSync(path.join(ROOT, 'src/services/geminiService.ts'), 'utf-8');
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+
+  assert.ok(sfService.includes('initGeneration'), 'StockfishService must guard against stale init timers across StrictMode mounts');
+  assert.ok(sfService.includes('clearTimeout(this.initTimer)'), 'StockfishService cleanup must clear pending init timers');
+  assert.match(geminiSrc, /checkServerStatus[\s\S]*?new AbortController\(\)/, 'checkServerStatus must abort stalled requests');
+  assert.match(appTsx, /if \(!isLoadingAI\) return;\s*const watchdog = setTimeout/, 'App must enforce a watchdog clearing isLoadingAI');
+  assert.match(appTsx, /useEffect\(\(\) => \{\s*if \(!isOnlineMode\) \{\s*void stockfishService\.init\(\);/, 'Stockfish init must run on StrictMode remount');
+});
+
+test('parseFenPosition parses castling rights, en passant, turn, and all 30 3D Academy lessons execute 100% legal moves', async () => {
+  const {
+    DEFAULT_START_FEN,
+    parseFenPosition,
+    squareToCoords,
+    applyChessMove,
+    boardToFen,
+  } = await import('../src/shared/chessRules.ts');
+  const { CHESS_ACADEMY_LESSONS } = await import('../src/data/chessAcademyLessons.ts');
+
+  const startState = parseFenPosition(DEFAULT_START_FEN);
+  assert.ok(startState);
+  assert.equal(startState.currentTurn, 'w');
+  assert.equal(boardToFen(startState.board, { currentTurn: 'w', enPassantTarget: null, halfMoveClock: 0, moveCount: 0 }), DEFAULT_START_FEN);
+
+  const customFen = '4k2r/8/8/3pP3/8/8/8/R3K3 w Qk d6 2 15';
+  const customState = parseFenPosition(customFen);
+  assert.ok(customState);
+  assert.equal(customState.board[7][0]?.hasMoved, false, 'White a1 rook should be unmoved when Q castling right exists');
+  assert.equal(customState.board[7][7], null);
+  assert.equal(customState.board[0][0], null);
+  assert.equal(customState.board[0][7]?.hasMoved, false, 'Black h8 rook should be unmoved when k castling right exists');
+  assert.deepEqual(customState.enPassantTarget, { r: 2, c: 3, pawnR: 3, pawnC: 3, color: 'b' });
+
+  assert.equal(CHESS_ACADEMY_LESSONS.length, 30, 'Academy 3D Mentor must contain exactly 30 lessons');
+  assert.equal(new Set(CHESS_ACADEMY_LESSONS.map((l) => l.id)).size, 30, 'Lesson IDs must be unique');
+  assert.equal(CHESS_ACADEMY_LESSONS.filter((l) => l.category === 'Otvaranje').length, 10);
+  assert.equal(CHESS_ACADEMY_LESSONS.filter((l) => l.category === 'Odbrana').length, 10);
+  assert.equal(CHESS_ACADEMY_LESSONS.filter((l) => l.category === 'Strategija').length, 5);
+  assert.equal(CHESS_ACADEMY_LESSONS.filter((l) => l.category === 'Poznata partija').length, 5);
+
+  for (const lesson of CHESS_ACADEMY_LESSONS) {
+    let state = parseFenPosition(lesson.initialFen || DEFAULT_START_FEN);
+    assert.ok(state, `Failed to parse initialFen for lesson ${lesson.id}`);
+    assert.ok(lesson.steps.length >= 2, `Lesson ${lesson.id} must have at least 2 steps`);
+
+    for (let i = 0; i < lesson.steps.length; i++) {
+      const step = lesson.steps[i];
+      const from = squareToCoords(step.from);
+      const to = squareToCoords(step.to);
+      assert.ok(from && to, `Invalid coordinates in ${lesson.id} step ${i + 1}: ${step.from}->${step.to}`);
+      const res = applyChessMove(state, from.r, from.c, to.r, to.c, step.promotion);
+      assert.equal(
+        res.ok,
+        true,
+        `Illegal move in lesson ${lesson.id} step ${i + 1} (${step.moveNumber}: ${step.from}->${step.to}): ${res.reason || ''}`
+      );
+      state = res.state;
+    }
+  }
+});
+
+test('3D Mentor Tutorial wires engine FEN loading, animated steps, board lock, SFX, and Igraj odavde takeover', () => {
+  const academySrc = fs.readFileSync(path.join(ROOT, 'src/components/Academy.tsx'), 'utf-8');
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const progressionSrc = fs.readFileSync(path.join(ROOT, 'src/services/academyProgression.ts'), 'utf-8');
+
+  assert.ok(academySrc.includes('Interaktivni 3D Tutorijal (30 lekcija)'));
+  assert.ok(academySrc.includes('id="btn-tutorial-takeover"'));
+  assert.ok(academySrc.includes('Igraj odavde'));
+  assert.ok(academySrc.includes('id="btn-tutorial-next-step"'));
+  assert.ok(academySrc.includes('id="btn-tutorial-reset"'));
+
+  assert.ok(appTsx.includes('enterAcademyTutorial'));
+  assert.ok(appTsx.includes('executeTutorialMove'));
+  assert.ok(appTsx.includes('takeOverAcademyGame'));
+  assert.ok(appTsx.includes('academyProgression.markTutorialCompleted'));
+
+  assert.ok(engineSrc.includes('function enterAcademyTutorial('));
+  assert.ok(engineSrc.includes('function setAcademyFenPosition('));
+  assert.ok(engineSrc.includes('function executeTutorialMove('));
+  assert.ok(engineSrc.includes('function takeOverAcademyGame('));
+  assert.ok(engineSrc.includes('|| academyTutorialMode) return;'), '3D board clicks must be locked during tutorial playback');
+  assert.ok(engineSrc.includes('tutorialStep: Boolean(options.tutorialStep)'));
+
+  assert.ok(progressionSrc.includes('wizard_academy_tutorials_v1'));
+  assert.ok(progressionSrc.includes('markTutorialCompleted('));
+});
+
+test('Central Park Zen mode builds procedural outdoor plaza, swaps stone board, silences hologram & voice, and exposes HUD toggle', () => {
+  const parkEnvSrc = fs.readFileSync(path.join(ROOT, 'src/three/environments/outdoorParkEnv.ts'), 'utf-8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const voiceSrc = fs.readFileSync(path.join(ROOT, 'src/services/voiceService.ts'), 'utf-8');
+  const bubbleSrc = fs.readFileSync(path.join(ROOT, 'src/components/AIBubble.tsx'), 'utf-8');
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+
+  assert.ok(parkEnvSrc.includes('export function createOutdoorParkEnvironment('));
+  assert.ok(parkEnvSrc.includes('createCentralParkChessPedestal'));
+  assert.ok(parkEnvSrc.includes('createCentralParkBench'));
+  assert.ok(parkEnvSrc.includes('createCentralParkLamp'));
+  assert.ok(parkEnvSrc.includes('createParkParasolSet'));
+  assert.ok(parkEnvSrc.includes('createCentralParkTree'));
+  assert.ok(parkEnvSrc.includes('createManhattanSkylineRing'));
+  assert.ok(parkEnvSrc.includes('dispose: () =>'));
+
+  assert.ok(engineSrc.includes('function setAmbienceMode(mode)'));
+  assert.ok(engineSrc.includes('function syncOpponentHologramVisibility()'));
+  assert.ok(engineSrc.includes("ambienceMode !== 'park'"));
+  assert.ok(engineSrc.includes('0xeceef2') && engineSrc.includes('0x181b20'), 'Park mode must apply high-contrast stone square colors');
+  assert.ok(engineSrc.includes('boardRimMat = goldTrimMat.clone()'), 'Board rim must use dedicated material so chess piece goldTrimMat stays untouched');
+  assert.ok(engineSrc.includes('setAmbienceMode,') && engineSrc.includes('getAmbienceMode,'));
+
+  assert.ok(voiceSrc.includes('setAmbienceMuted(muted: boolean)'));
+  assert.ok(voiceSrc.includes('this.mutedByAmbience'));
+  assert.ok(bubbleSrc.includes('zenMode?: boolean'));
+  assert.ok(bubbleSrc.includes('Central Park · Zen tekstualni saveti'));
+
+  assert.ok(appTsx.includes('wizard_chess_ambience'));
+  assert.ok(appTsx.includes('id="btn-ambience-toggle"'));
+  assert.ok(appTsx.includes('🌳 Park (Čista 3D tabla)'));
+  assert.ok(appTsx.includes('🏛️ Katedrala (Duel)'));
+  assert.ok(appTsx.includes("zenMode={ambience === 'park'}"));
+});
+
+
 
 
 

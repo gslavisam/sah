@@ -248,8 +248,10 @@ class GeminiService {
     if (this.serverConfigured !== null) {
       return this.serverConfigured;
     }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
     try {
-      const res = await fetch('/api/gemini/status');
+      const res = await fetch('/api/gemini/status', { signal: controller.signal });
       if (!res.ok) {
         this.serverConfigured = false;
         return false;
@@ -259,6 +261,8 @@ class GeminiService {
       return this.serverConfigured;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -267,7 +271,7 @@ class GeminiService {
       return null;
     }
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 3800);
     try {
       const res = await fetch('/api/gemini/generate', {
         method: 'POST',

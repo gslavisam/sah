@@ -16,10 +16,12 @@ import { progressionService } from './services/progressionService';
 import { authService, type AuthSnapshot } from './services/authService';
 import { multiplayerService, type OnlineSessionSnapshot } from './services/multiplayerService';
 import { stockfishService } from './services/stockfishService';
-import type { VoiceCue } from './services/voiceService';
+import { voiceService, type VoiceCue } from './services/voiceService';
 import type { SceneThemeId } from './services/sceneThemes';
 import type { OnlinePersonaId, PreferredSide, TimeControlId } from './shared/multiplayerTypes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
+import { academyProgression } from './services/academyProgression';
+import { CHESS_ACADEMY_LESSONS, type AcademyCategory } from './data/chessAcademyLessons';
 import {
   classifyPlayerMoveQuality,
   evalToDisplay,
@@ -30,6 +32,7 @@ type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srps
 type AIDifficulty = 'easy' | 'medium' | 'hard';
 type CameraView = 'player' | 'top';
 type PromotionPieceType = 'queen' | 'rook' | 'bishop' | 'knight';
+type AmbienceMode = 'cathedral' | 'park';
 
 const PROMOTION_OPTIONS: { type: PromotionPieceType; label: string }[] = [
   { type: 'queen', label: 'Kraljica' },
@@ -106,12 +109,30 @@ export default function App() {
   const [academyVisible, setAcademyVisible] = useState(false);
   const academyVisibleRef = useRef(academyVisible);
   academyVisibleRef.current = academyVisible;
-  const [academyView, setAcademyView] = useState<'home' | 'puzzle'>('home');
+  const [academyView, setAcademyView] = useState<'home' | 'puzzle' | 'tutorial'>('home');
   const [academyPuzzleId, setAcademyPuzzleId] = useState<string | null>(null);
   const [academyFeedback, setAcademyFeedback] = useState<'idle' | 'wrong' | 'solved'>('idle');
   const [academyHintCount, setAcademyHintCount] = useState(0);
   const [academyError, setAcademyError] = useState<string | null>(null);
+  const [tutorialLessonId, setTutorialLessonId] = useState<string>(CHESS_ACADEMY_LESSONS[0].id);
+  const tutorialLessonIdRef = useRef<string>(tutorialLessonId);
+  tutorialLessonIdRef.current = tutorialLessonId;
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
+  const tutorialStepIndexRef = useRef(0);
+  tutorialStepIndexRef.current = tutorialStepIndex;
+  const [tutorialAnimating, setTutorialAnimating] = useState(false);
+  const [tutorialGameOver, setTutorialGameOver] = useState(false);
+  const tutorialAnimTimerRef = useRef<number | null>(null);
   const [is2DMode, setIs2DMode] = useState(false);
+  const [ambience, setAmbience] = useState<AmbienceMode>(() => {
+    try {
+      const saved = localStorage.getItem('wizard_chess_ambience');
+      if (saved === 'cathedral' || saved === 'park') return saved;
+      return 'park';
+    } catch {
+      return 'park';
+    }
+  });
   const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
   const [onlineSession, setOnlineSession] = useState<OnlineSessionSnapshot>(() =>
     multiplayerService.getSnapshot()
@@ -162,13 +183,29 @@ export default function App() {
       console.warn(`Could not apply AI difficulty: ${aiDifficulty}.`);
     }
     applySceneTheme(selectedPersonaRef.current);
-    if (!isOnlineModeRef.current) {
+    const ambienceWindow = window as Window & {
+      wizardChess?: { setAmbienceMode?: (mode: AmbienceMode) => AmbienceMode };
+    };
+    ambienceWindow.wizardChess?.setAmbienceMode?.(ambience);
+    voiceService.setAmbienceMuted(ambience === 'park');
+  }, []);
+
+  useEffect(() => {
+    if (!isOnlineMode) {
       void stockfishService.init();
     }
     return () => {
       stockfishService.terminate();
     };
-  }, []);
+  }, [isOnlineMode]);
+
+  useEffect(() => {
+    if (!isLoadingAI) return;
+    const watchdog = setTimeout(() => {
+      setIsLoadingAI(false);
+    }, 6500);
+    return () => clearTimeout(watchdog);
+  }, [isLoadingAI]);
 
   useEffect(() => {
     void authService.init();
@@ -181,6 +218,8 @@ export default function App() {
       onRoomEntered: (yourColor, state, isRematch) => {
         setAcademyVisible(false);
         setPendingPromotion(null);
+        aiRequestSeqRef.current += 1;
+        setIsLoadingAI(false);
         evalReqSeqRef.current += 1;
         stockfishService.cancelPending();
         setEvalState(null);
@@ -388,6 +427,19 @@ export default function App() {
   }, [is2DMode]);
 
   useEffect(() => {
+    const win = window as Window & {
+      wizardChess?: { setAmbienceMode?: (mode: AmbienceMode) => AmbienceMode };
+    };
+    win.wizardChess?.setAmbienceMode?.(ambience);
+    voiceService.setAmbienceMuted(ambience === 'park');
+    try {
+      localStorage.setItem('wizard_chess_ambience', ambience);
+    } catch (error) {
+      console.warn('Ambience preference could not be saved.', error);
+    }
+  }, [ambience]);
+
+  useEffect(() => {
     const handlePieceSetLoading = (event: Event) => {
       const detail = (event as CustomEvent<{ setId?: PieceSetId; loading?: boolean; failed?: boolean }>).detail;
       setIsLoadingPieceSet(Boolean(detail?.loading));
@@ -526,7 +578,6 @@ export default function App() {
       }
 
       const reqId = ++aiRequestSeqRef.current;
-      setIsLoadingAI(true);
       try {
         let voiceCue: VoiceCue = isCheckmate
           ? 'checkmate'
@@ -590,6 +641,21 @@ export default function App() {
           }
         }
 
+        const shouldCommentWithAI =
+          isOnlineModeRef.current ||
+          !isPlayerMove ||
+          detail.gameOver ||
+          detail.inCheck ||
+          enrichedDetail.moveQuality === 'blunder';
+
+        if (!shouldCommentWithAI || reqId !== aiRequestSeqRef.current) {
+          if (reqId === aiRequestSeqRef.current) {
+            setIsLoadingAI(false);
+          }
+          return;
+        }
+
+        setIsLoadingAI(true);
         const reaction = await geminiService.getReaction(selectedPersonaRef.current, enrichedDetail);
         if (reqId === aiRequestSeqRef.current) {
           setAiVoiceCue(voiceCue);
@@ -635,12 +701,71 @@ export default function App() {
 
   useEffect(() => {
     const handleAcademyMove = (e: Event) => {
-      const detail = (e as CustomEvent<{ isCheckmate?: boolean }>).detail;
+      const detail = (
+        e as CustomEvent<{
+          isCheckmate?: boolean;
+          gameOver?: boolean;
+          inCheck?: boolean;
+          move?: { capture?: boolean };
+          tutorialStep?: boolean;
+        }>
+      ).detail;
+
+      if (detail?.isCheckmate) {
+        soundService.playCheckmate();
+      } else if (detail?.inCheck) {
+        soundService.playCheck();
+      } else if (detail?.move?.capture) {
+        soundService.playCapture();
+      } else {
+        soundService.playMove();
+      }
+
+      if (detail?.tutorialStep) {
+        if (tutorialAnimTimerRef.current !== null) {
+          window.clearTimeout(tutorialAnimTimerRef.current);
+          tutorialAnimTimerRef.current = null;
+        }
+        setTutorialAnimating(false);
+        setTutorialGameOver(Boolean(detail.gameOver));
+        const activeLesson = CHESS_ACADEMY_LESSONS.find(
+          (item) => item.id === tutorialLessonIdRef.current
+        );
+        setTutorialStepIndex((prev) => {
+          const next = activeLesson ? Math.min(prev + 1, activeLesson.steps.length) : prev + 1;
+          if (activeLesson && next >= activeLesson.steps.length) {
+            academyProgression.markTutorialCompleted(activeLesson.id);
+          }
+          return next;
+        });
+        return;
+      }
+
       setAcademyFeedback(detail?.isCheckmate ? 'solved' : 'wrong');
     };
     window.addEventListener('wizardchess:academy-move', handleAcademyMove);
-    return () => window.removeEventListener('wizardchess:academy-move', handleAcademyMove);
+    return () => {
+      window.removeEventListener('wizardchess:academy-move', handleAcademyMove);
+      if (tutorialAnimTimerRef.current !== null) {
+        window.clearTimeout(tutorialAnimTimerRef.current);
+        tutorialAnimTimerRef.current = null;
+      }
+    };
   }, []);
+
+  const restoreEvalFromEngine = () => {
+    const win = window as Window & { wizardChess?: { getFen?: () => string } };
+    const restoredFen = win.wizardChess?.getFen?.();
+    if (restoredFen && !isOnlineModeRef.current) {
+      const evalSeq = ++evalReqSeqRef.current;
+      void stockfishService.evaluatePosition(restoredFen, 120).then((evalRes) => {
+        if (evalSeq === evalReqSeqRef.current && evalRes) {
+          evalBeforeRef.current = evalRes;
+          setEvalState(evalRes);
+        }
+      });
+    }
+  };
 
   const handleOpenAcademy = () => {
     if (isOnlineModeRef.current) return;
@@ -650,6 +775,7 @@ export default function App() {
     setAcademyPuzzleId(null);
     setAcademyFeedback('idle');
     setAcademyHintCount(0);
+    setTutorialAnimating(false);
     setAcademyError(null);
     setAcademyVisible(true);
   };
@@ -709,48 +835,196 @@ export default function App() {
     setAcademyError(null);
   };
 
+  const handleOpenTutorial = (category?: AcademyCategory) => {
+    const targetLesson =
+      (category ? CHESS_ACADEMY_LESSONS.find((item) => item.category === category) : undefined) ||
+      CHESS_ACADEMY_LESSONS.find((item) => item.id === tutorialLessonIdRef.current) ||
+      CHESS_ACADEMY_LESSONS[0];
+    const win = window as Window & {
+      wizardChess?: {
+        enterAcademyTutorial?: (
+          fen?: string,
+          options?: { viewSide?: 'w' | 'b'; immediateCamera?: boolean }
+        ) => boolean;
+      };
+    };
+    const viewSide = targetLesson.category === 'Odbrana' ? 'b' : 'w';
+    if (!win.wizardChess?.enterAcademyTutorial?.(targetLesson.initialFen, { viewSide })) {
+      setAcademyError('3D tutorijal nije mogao da se pokrene na tabli. Pokušaj ponovo.');
+      return;
+    }
+    evalReqSeqRef.current += 1;
+    stockfishService.cancelPending();
+    setIsEvaluating(false);
+    setAcademyView('tutorial');
+    setTutorialLessonId(targetLesson.id);
+    setTutorialStepIndex(0);
+    setTutorialAnimating(false);
+    setTutorialGameOver(false);
+    setAcademyError(null);
+  };
+
+  const handleSelectTutorialLesson = (lessonId: string) => {
+    const targetLesson = CHESS_ACADEMY_LESSONS.find((item) => item.id === lessonId);
+    if (!targetLesson) return;
+    if (tutorialAnimTimerRef.current !== null) {
+      window.clearTimeout(tutorialAnimTimerRef.current);
+      tutorialAnimTimerRef.current = null;
+    }
+    const win = window as Window & {
+      wizardChess?: {
+        setAcademyFenPosition?: (
+          fen?: string,
+          options?: { viewSide?: 'w' | 'b'; immediateCamera?: boolean }
+        ) => boolean;
+      };
+    };
+    const viewSide = targetLesson.category === 'Odbrana' ? 'b' : 'w';
+    if (!win.wizardChess?.setAcademyFenPosition?.(targetLesson.initialFen, { viewSide })) {
+      setAcademyError('Lekcija nije mogla da se učita na 3D tablu.');
+      return;
+    }
+    setTutorialLessonId(targetLesson.id);
+    setTutorialStepIndex(0);
+    setTutorialAnimating(false);
+    setTutorialGameOver(false);
+    setAcademyError(null);
+  };
+
+  const handlePlayTutorialStep = () => {
+    if (tutorialAnimating) return;
+    const lesson = CHESS_ACADEMY_LESSONS.find((item) => item.id === tutorialLessonIdRef.current);
+    const step = lesson?.steps[tutorialStepIndexRef.current];
+    if (!lesson || !step) return;
+    const win = window as Window & {
+      wizardChess?: {
+        executeTutorialMove?: (from: string, to: string, promotion?: string) => boolean;
+      };
+    };
+    setAcademyError(null);
+    setTutorialAnimating(true);
+    const ok = win.wizardChess?.executeTutorialMove?.(step.from, step.to, step.promotion);
+    if (!ok) {
+      setTutorialAnimating(false);
+      setAcademyError(`Potez ${step.moveNumber} nije mogao da se odigra na tabli.`);
+      return;
+    }
+    if (tutorialAnimTimerRef.current !== null) {
+      window.clearTimeout(tutorialAnimTimerRef.current);
+    }
+    tutorialAnimTimerRef.current = window.setTimeout(() => {
+      tutorialAnimTimerRef.current = null;
+      setTutorialAnimating(false);
+    }, 4500);
+  };
+
+  const handleResetTutorialLesson = () => {
+    handleSelectTutorialLesson(tutorialLessonIdRef.current);
+  };
+
+  const handleTakeOverTutorial = () => {
+    const lesson = CHESS_ACADEMY_LESSONS.find((item) => item.id === tutorialLessonIdRef.current);
+    const preferredSide: 'w' | 'b' = lesson?.category === 'Odbrana' ? 'b' : 'w';
+    if (tutorialAnimTimerRef.current !== null) {
+      window.clearTimeout(tutorialAnimTimerRef.current);
+      tutorialAnimTimerRef.current = null;
+    }
+    const win = window as Window & {
+      wizardChess?: {
+        takeOverAcademyGame?: (preferredPlayerColor?: 'w' | 'b') => boolean;
+        getFen?: () => string;
+        getCurrentTurn?: () => 'w' | 'b';
+      };
+    };
+    if (!win.wizardChess?.takeOverAcademyGame?.(preferredSide)) {
+      setAcademyError('Partija nije mogla da se preuzme iz tutorijala.');
+      return;
+    }
+    setTutorialAnimating(false);
+    setAcademyVisible(false);
+    setAcademyView('home');
+    setAcademyError(null);
+    setPlayerColor(preferredSide);
+
+    stockfishService.newGame();
+    const takeoverFen = win.wizardChess?.getFen?.();
+    if (takeoverFen) {
+      const evalSeq = ++evalReqSeqRef.current;
+      setIsEvaluating(true);
+      void stockfishService
+        .evaluatePosition(takeoverFen, 120)
+        .then((evalRes) => {
+          if (evalSeq === evalReqSeqRef.current && evalRes) {
+            evalBeforeRef.current = evalRes;
+            setEvalState(evalRes);
+          }
+        })
+        .finally(() => {
+          if (evalSeq === evalReqSeqRef.current) {
+            setIsEvaluating(false);
+          }
+        });
+    }
+
+    const turnNow = win.wizardChess?.getCurrentTurn?.() || 'w';
+    const personaName = PERSONAS[selectedPersonaRef.current].name;
+    setAiVoiceCue('opening');
+    setAiMessage(
+      turnNow === preferredSide
+        ? `Preuzeo si poziciju iz lekcije „${lesson?.name || 'Akademija'}“ (${preferredSide === 'w' ? 'beli' : 'crni'}). Tvoj potez!`
+        : `Nastavljaš iz lekcije „${lesson?.name || 'Akademija'}“. ${personaName} povlači odgovor!`
+    );
+  };
+
+  const handleLeaveTutorial = () => {
+    if (tutorialAnimTimerRef.current !== null) {
+      window.clearTimeout(tutorialAnimTimerRef.current);
+      tutorialAnimTimerRef.current = null;
+    }
+    const win = window as Window & {
+      wizardChess?: { exitAcademy?: () => boolean };
+    };
+    if (!win.wizardChess?.exitAcademy?.()) {
+      setAcademyError('Prethodna partija nije mogla automatski da se vrati.');
+      return;
+    }
+    restoreEvalFromEngine();
+    setAcademyView('home');
+    setTutorialAnimating(false);
+    setTutorialGameOver(false);
+    setAcademyError(null);
+  };
+
   const handleCloseAcademy = () => {
-    if (academyView === 'puzzle') {
+    if (tutorialAnimTimerRef.current !== null) {
+      window.clearTimeout(tutorialAnimTimerRef.current);
+      tutorialAnimTimerRef.current = null;
+    }
+    if (academyView === 'puzzle' || academyView === 'tutorial') {
       const win = window as Window & {
-        wizardChess?: { exitAcademy?: () => boolean; getFen?: () => string };
+        wizardChess?: { exitAcademy?: () => boolean };
       };
       if (!win.wizardChess?.exitAcademy?.()) {
         setAcademyError('Partija nije mogla automatski da se vrati. Osveži stranicu samo ako je tabla ostala zaglavljena.');
         return;
       }
-      const restoredFen = win.wizardChess?.getFen?.();
-      if (restoredFen && !isOnlineModeRef.current) {
-        const evalSeq = ++evalReqSeqRef.current;
-        void stockfishService.evaluatePosition(restoredFen, 120).then((evalRes) => {
-          if (evalSeq === evalReqSeqRef.current && evalRes) {
-            evalBeforeRef.current = evalRes;
-            setEvalState(evalRes);
-          }
-        });
-      }
+      restoreEvalFromEngine();
     }
+    setTutorialAnimating(false);
+    setAcademyView('home');
     setAcademyVisible(false);
     setAcademyError(null);
   };
 
   const handleLeavePuzzle = () => {
     const win = window as Window & {
-      wizardChess?: { exitAcademy?: () => boolean; getFen?: () => string };
+      wizardChess?: { exitAcademy?: () => boolean };
     };
     if (!win.wizardChess?.exitAcademy?.()) {
       setAcademyError('Partija nije mogla automatski da se vrati. Pokušaj ponovo ili izađi iz Akademije.');
       return;
     }
-    const restoredFen = win.wizardChess?.getFen?.();
-    if (restoredFen && !isOnlineModeRef.current) {
-      const evalSeq = ++evalReqSeqRef.current;
-      void stockfishService.evaluatePosition(restoredFen, 120).then((evalRes) => {
-        if (evalSeq === evalReqSeqRef.current && evalRes) {
-          evalBeforeRef.current = evalRes;
-          setEvalState(evalRes);
-        }
-      });
-    }
+    restoreEvalFromEngine();
     setAcademyView('home');
     setAcademyPuzzleId(null);
     setAcademyFeedback('idle');
@@ -937,13 +1211,14 @@ export default function App() {
         />
       )}
 
-      {/* Floating AI Dialogue Speech Bubble with Voice Synthesis */}
+      {/* Floating AI Dialogue Speech Bubble (voice silenced in Central Park Zen mode; text & Hint stay active) */}
       <AIBubble
         personaId={selectedPersona}
         message={aiMessage}
         voiceCue={aiVoiceCue}
         isLoading={isLoadingAI}
         hintDisabled={isOnlineMode}
+        zenMode={ambience === 'park'}
         onRequestHint={handleRequestHint}
       />
 
@@ -1095,6 +1370,22 @@ export default function App() {
           >
             {is2DMode ? '🏰 3D' : '⬚ 2D'}
           </button>
+          <button
+            type="button"
+            className={`hud-btn ${ambience === 'park' ? 'park-active' : ''}`}
+            id="btn-ambience-toggle"
+            title={
+              ambience === 'park'
+                ? 'Prebaci na mračnu katedralu sa 3D protivnikom i glasom'
+                : 'Prebaci u Sunčani Central Park (Zen režim bez avatara i govora)'
+            }
+            onClick={() => {
+              setAmbience((prev) => (prev === 'park' ? 'cathedral' : 'park'));
+              setMobileSheetOpen(false);
+            }}
+          >
+            {ambience === 'park' ? '🏛️ Katedrala (Duel)' : '🌳 Park (Čista 3D tabla)'}
+          </button>
         </div>
 
         {/* ── Capsule 2: Partija (centar) ── */}
@@ -1240,6 +1531,10 @@ export default function App() {
           puzzleId={academyPuzzleId}
           feedback={academyFeedback}
           hintCount={academyHintCount}
+          tutorialLessonId={tutorialLessonId}
+          tutorialStepIndex={tutorialStepIndex}
+          tutorialAnimating={tutorialAnimating}
+          tutorialGameOver={tutorialGameOver}
           error={academyError}
           onClose={handleCloseAcademy}
           onOpenPuzzle={handleStartPuzzle}
@@ -1248,6 +1543,12 @@ export default function App() {
           hasNextPuzzle={PUZZLES.findIndex((puzzle) => puzzle.id === academyPuzzleId) < PUZZLES.length - 1}
           onShowHint={() => setAcademyHintCount((count) => Math.min(count + 1, 3))}
           onRetry={handleRetryPuzzle}
+          onOpenTutorial={handleOpenTutorial}
+          onSelectTutorialLesson={handleSelectTutorialLesson}
+          onPlayTutorialStep={handlePlayTutorialStep}
+          onResetTutorialLesson={handleResetTutorialLesson}
+          onTakeOverTutorial={handleTakeOverTutorial}
+          onLeaveTutorial={handleLeaveTutorial}
         />
       ) : null}
 

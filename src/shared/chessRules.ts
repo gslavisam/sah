@@ -729,6 +729,122 @@ export function boardToFen(
   return `${rankRows.join('/')} ${turn} ${castling} ${epSq} ${halfMove} ${fullMove}`;
 }
 
+export const DEFAULT_START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+const FEN_CHAR_TO_TYPE: Record<string, PieceType> = {
+  p: 'pawn',
+  r: 'rook',
+  n: 'knight',
+  b: 'bishop',
+  q: 'queen',
+  k: 'king',
+};
+
+export function parseFenPosition(fen: string = DEFAULT_START_FEN): ChessRulesState | null {
+  if (typeof fen !== 'string' || !fen.trim()) return null;
+  const parts = fen.trim().split(/\s+/);
+  const placement = parts[0];
+  if (!placement) return null;
+
+  const ranks = placement.split('/');
+  if (ranks.length !== 8) return null;
+
+  const board: (BoardPiece | null)[][] = Array.from({ length: 8 }, () => Array(8).fill(null));
+  for (let r = 0; r < 8; r++) {
+    let c = 0;
+    for (const ch of ranks[r]) {
+      if (ch >= '1' && ch <= '8') {
+        c += Number(ch);
+      } else {
+        const lower = ch.toLowerCase();
+        const type = FEN_CHAR_TO_TYPE[lower];
+        if (!type || c >= 8) return null;
+        const color: PieceColor = ch === lower ? 'b' : 'w';
+        const isUnmovedPawn = type === 'pawn' && ((color === 'w' && r === 6) || (color === 'b' && r === 1));
+        board[r][c] = {
+          type,
+          color,
+          hasMoved: !isUnmovedPawn,
+        };
+        c += 1;
+      }
+    }
+    if (c !== 8) return null;
+  }
+
+  const castlingField = parts[2] || '-';
+  if (castlingField.includes('K')) {
+    if (board[7][4]?.type === 'king' && board[7][4]?.color === 'w') board[7][4]!.hasMoved = false;
+    if (board[7][7]?.type === 'rook' && board[7][7]?.color === 'w') board[7][7]!.hasMoved = false;
+  }
+  if (castlingField.includes('Q')) {
+    if (board[7][4]?.type === 'king' && board[7][4]?.color === 'w') board[7][4]!.hasMoved = false;
+    if (board[7][0]?.type === 'rook' && board[7][0]?.color === 'w') board[7][0]!.hasMoved = false;
+  }
+  if (castlingField.includes('k')) {
+    if (board[0][4]?.type === 'king' && board[0][4]?.color === 'b') board[0][4]!.hasMoved = false;
+    if (board[0][7]?.type === 'rook' && board[0][7]?.color === 'b') board[0][7]!.hasMoved = false;
+  }
+  if (castlingField.includes('q')) {
+    if (board[0][4]?.type === 'king' && board[0][4]?.color === 'b') board[0][4]!.hasMoved = false;
+    if (board[0][0]?.type === 'rook' && board[0][0]?.color === 'b') board[0][0]!.hasMoved = false;
+  }
+
+  const turn: PieceColor = parts[1] === 'b' ? 'b' : 'w';
+  const epField = parts[3] || '-';
+  let enPassantTarget: EnPassantTarget | null = null;
+  if (epField !== '-') {
+    const epCoords = squareToCoords(epField);
+    if (epCoords) {
+      const pawnR = turn === 'w' ? epCoords.r + 1 : epCoords.r - 1;
+      const enemyColor: PieceColor = turn === 'w' ? 'b' : 'w';
+      if (inBounds(pawnR, epCoords.c) && board[pawnR][epCoords.c]?.type === 'pawn' && board[pawnR][epCoords.c]?.color === enemyColor) {
+        enPassantTarget = {
+          r: epCoords.r,
+          c: epCoords.c,
+          pawnR,
+          pawnC: epCoords.c,
+          color: enemyColor,
+        };
+      }
+    }
+  }
+
+  const halfMoveParsed = Number.parseInt(parts[4] || '0', 10);
+  const fullMoveParsed = Number.parseInt(parts[5] || '1', 10);
+  const halfMoveClock = Number.isNaN(halfMoveParsed) ? 0 : Math.max(0, halfMoveParsed);
+  const fullMove = Number.isNaN(fullMoveParsed) ? 1 : Math.max(1, fullMoveParsed);
+  const moveCount = Math.max(0, (fullMove - 1) * 2 + (turn === 'b' ? 1 : 0));
+
+  const inCheck = isKingInCheck(turn, board);
+  const posKey = computePositionKey(board, turn, enPassantTarget);
+  const baseState: ChessRulesState = {
+    board,
+    currentTurn: turn,
+    enPassantTarget,
+    halfMoveClock,
+    positionHistory: [posKey],
+    moveCount,
+    inCheck,
+    isCheckmate: false,
+    drawReason: null,
+    gameOver: false,
+    lastMove: null,
+  };
+
+  const nextLegal = getAllLegalMoves(baseState, turn);
+  if (nextLegal.length === 0) {
+    baseState.gameOver = true;
+    if (inCheck) {
+      baseState.isCheckmate = true;
+    } else {
+      baseState.drawReason = 'stalemate';
+    }
+  }
+
+  return baseState;
+}
+
 export function getStockfishEloProfile(
   personaId: StockfishPersonaId | string,
   difficulty: StockfishDifficulty | string
