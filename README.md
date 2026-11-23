@@ -8,7 +8,7 @@
   - **Sunčani Park (Zen režim)** — proceduralni popločani trg na otvorenom sa kamenom tablom visokog kontrasta, bez 3D protivnika i bez glasovnih komentara (čista 3D igra i tekstualni saveti).
   - **Gotička katedrala (Duel režim)** — detaljan 3D hram sa tri tematska okruženja i hologramskim protivnicima koji prate dešavanja na tabli.
   - **Klasična 2D Staunton tabla** (`⬚ 2D`, prečica `2`) — trenutni odziv poteza, okretanje table, prikaz šaha/mata/remija i sinhronizacija sa 3D scenom.
-- **Sedam setova figura:** čarobnjački GLB (`wizard`), proceduralni antički (`ancient`), „Zmajevi i vitezovi“ (`dragon`), proceduralni „Srednji vek“ (`medieval`) i lenjo učitani dvobojni GLB setovi `vitez`, `srpski` i `klasicni` (izbor se čuva u pregledaču).
+- **Sedam setova figura:** podrazumevani dvobojni klasični Staunton GLB (`klasicni` — *Klasični*), čarobnjački GLB (`wizard`), proceduralni antički (`ancient`), „Zmajevi i vitezovi“ (`dragon`), proceduralni „Srednji vek“ (`medieval`) i lenjo učitani dvobojni GLB setovi `vitez` i `srpski` (izbor se čuva u pregledaču).
 - **Stockfish 19 Lite WASM analiza, saveti i Vođeni režim:**
   - **Evaluaciona traka (`EvalBar`)** uživo u 3D HUD-u i 2D tabli, uz detekciju grešaka i blundera.
   - **Tri nivoa AI protivnika** (*Lako*, *Srednje*, *Teško*) profilisana po ELO jačini u zavisnosti od izabranog AI lika, sa lokalnim JS minimax fallback-om.

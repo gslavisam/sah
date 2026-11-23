@@ -1000,8 +1000,8 @@ export function initWizardChess() {
     const activeMixers = [];
     const shatterDebris = [];
     const clock = new THREE.Clock();
-    let activePieceSet = 'wizard';
-    let desiredPieceSet = 'wizard';
+    let activePieceSet = 'klasicni';
+    let desiredPieceSet = 'klasicni';
     let initialAssetsLoaded = false;
     const stoneTextureSize = 128;
     const stoneTextureData = new Uint8Array(stoneTextureSize * stoneTextureSize * 4);

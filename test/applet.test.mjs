@@ -233,15 +233,20 @@ test('Academy publishes 12 puzzles and 12 lessons for each learning area', () =>
   assert.match(puzzleSource, /solution: \{ fromR: r, fromC: 1, toR: 1, toC: 1 \}/);
 });
 
-test('Piece set persistence supports Klasični and extra GLB sets lazy-load on demand', () => {
+test('Piece set persistence defaults to Klasični for new users and extra GLB sets lazy-load on demand', () => {
   const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
   const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
 
   assert.ok(!appTsx.includes('srpski-kraljevski'), 'Removed srpski-kraljevski set must not be restored');
   assert.match(
     appTsx,
-    /localStorage\.getItem\('wizard_chess_piece_set'\)[\s\S]*?saved === 'klasicni'/,
-    'Saved Klasični piece set must be restored on reload'
+    /localStorage\.getItem\('wizard_chess_piece_set'\)[\s\S]*?saved === 'klasicni'[\s\S]*?return 'klasicni';/,
+    'New users without saved piece set preference must default to Klasični in App.tsx'
+  );
+  assert.match(
+    engine,
+    /let activePieceSet = 'klasicni';\s*\n\s*let desiredPieceSet = 'klasicni';/,
+    'Engine must default activePieceSet and desiredPieceSet to klasicni for new users'
   );
   assert.ok(
     engine.includes('function ensureBoardFitPieceSetLoaded(targetSetId'),

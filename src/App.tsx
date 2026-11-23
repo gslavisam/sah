@@ -55,7 +55,7 @@ const PROMOTION_OPTIONS: { type: PromotionPieceType; label: string }[] = [
   { type: 'knight', label: 'Skakač' },
 ];
 
-const PIECE_SET_ORDER: PieceSetId[] = ['wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski', 'klasicni'];
+const PIECE_SET_ORDER: PieceSetId[] = ['klasicni', 'wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski'];
 const AI_DIFFICULTY_ORDER: AIDifficulty[] = ['easy', 'medium', 'hard'];
 const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   wizard: 'Čarobnjački',
@@ -91,10 +91,10 @@ export default function App() {
       ) {
         return saved;
       }
-      return 'wizard';
+      return 'klasicni';
     } catch (error) {
       console.warn('Chess piece set preference could not be loaded.', error);
-      return 'wizard';
+      return 'klasicni';
     }
   });
   const [isLoadingPieceSet, setIsLoadingPieceSet] = useState(false);

@@ -269,14 +269,15 @@ body.cinematic-ui-hidden .mobile-controls-trigger {
 
 .dock-capsule-label {
   position: absolute;
-  top: -16px;
+  top: -19px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 0.58rem;
-  font-weight: 600;
+  font-size: 0.68rem;
+  font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(212, 175, 55, 0.6);
+  color: #b8860b;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.55);
   white-space: nowrap;
   pointer-events: none;
 }
@@ -685,7 +686,7 @@ body.cinematic-ui-hidden .restore-ui-button {
   #hud-dock .dock-capsule {
     flex-wrap: wrap;
     border-radius: 14px;
-    padding: 22px 10px 8px;
+    padding: 25px 10px 8px;
     gap: 6px;
   }
 

@@ -616,7 +616,7 @@ sequenceDiagram
 1. [server.ts](./server.ts) pokreće Express aplikaciju (sa Vite dev middleware-om u razvoju ili `dist/` fajlovima u produkciji), inicijalizuje SQLite `authStore` i vezuje WebSocket server na `/ws`.
 2. [index.html](./index.html) učitava [src/main.tsx](./src/main.tsx), koji montira `<App />` unutar `React.StrictMode` i uvozi stilove iz [src/styles.css](./src/styles.css).
 3. [src/App.tsx](./src/App.tsx) renderuje HUD (3 kapsule: `Režimi`, `Partija`, `Podešavanja`), AI oblačić, `EvalBar`, modale i jednom poziva `initWizardChess()`, primenjujući sačuvana podešavanja (`wizard_chess_piece_set`, `wizard_chess_ai_difficulty`, `wizard_chess_ambience`, `wizard_chess_guided_mode`).
-4. [src/wizardChessEngine.js](./src/wizardChessEngine.js) pravi WebGL renderer u `#canvas-container`, učitava katedralu i osnovni `wizard` set (plus eventualno zapamćeni dodatni GLB set), postavlja izabrani 3D ambijent i izlaže `window.wizardChess` API.
+4. [src/wizardChessEngine.js](./src/wizardChessEngine.js) pravi WebGL renderer u `#canvas-container`, učitava katedralu, osnovni `wizard` fallback i podrazumevani `klasicni` set (ili drugi sačuvani GLB set iz `localStorage`), postavlja izabrani 3D ambijent i izlaže `window.wizardChess` API.
 
 ---
 
@@ -688,7 +688,7 @@ sequenceDiagram
 ### 3D scena, ambijenti i Akademija
 
 - **Ambijenti (`setAmbienceMode('cathedral' | 'park')`):** U `park` režimu učitava se proceduralni trg iz `outdoorParkEnv.ts` sa kamenom tablom u ravni pločnika, dok su 3D hologram protivnika i glasovni komentari skriveni/utišani (`voiceService.setAmbienceMuted(true)`). Promena ambijenta i seta figura ne resetuje partiju.
-- **Setovi figura (`setPieceSet(...)`):** Podržani su `wizard`, `ancient`, `dragon`, `medieval`, `vitez`, `srpski` i `klasicni`. Dodatni GLB setovi (`vitez`, `srpski`, `klasicni`) dekompresuju se iz `public/assets/glb/` tek pri prvom izboru.
+- **Setovi figura (`setPieceSet(...)`):** Podržani su `klasicni` (podrazumevani set za nove korisnike), `wizard`, `ancient`, `dragon`, `medieval`, `vitez` i `srpski`. Dodatni GLB setovi (`vitez`, `srpski`, odnosno `klasicni` ako korisnik ima sačuvan drugi set) dekompresuju se iz `public/assets/glb/` tek kada su potrebni.
 - **Akademija i 3D Tutorijal:** Ulazak u zagonetku ili 3D tutorijal snima stanje tekuće single-player partije. Korisnik može da uvozi partije iz Lichess Masters baze, Lichess/Chess.com linkova i profila ili lokalnih `.pgn` fajlova i da nastavi bilo koju poziciju protiv AI-ja pomoću `takeOverAcademyGame(...)`.
 
 ### Onlajn 1-na-1 dueli i korisnički nalozi
