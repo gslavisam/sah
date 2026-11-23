@@ -68,17 +68,22 @@ test('Dragon pawns have team-colored center medallions and white dragon knights 
   assert.ok(engine.includes('cylinder(0.05, 0.07, 0.3, legMat'));
 });
 
-test('AI difficulty can be switched and medium and hard levels search ahead', () => {
+test('AI difficulty supports 5 calibrated levels with popover selector and JS search fallback', () => {
   const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
   const engine = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const rules = fs.readFileSync(path.join(ROOT, 'src/shared/chessRules.ts'), 'utf-8');
   assert.ok(appTsx.includes('wizard_chess_ai_difficulty'), 'AI difficulty preference must persist locally');
-  assert.ok(appTsx.includes("'easy', 'medium', 'hard'"), 'The UI must cycle through all three difficulty levels');
-  assert.ok(appTsx.includes("saved === 'hard'"), 'The hard difficulty preference must persist');
-  assert.ok(engine.includes("aiDifficulty === 'hard'"), 'The engine must select the hard difficulty');
-  assert.ok(engine.includes('function chooseMediumAIMove(color)'), 'Medium difficulty must be implemented');
+  for (const level of ['beginner', 'casual', 'intermediate', 'advanced', 'master']) {
+    assert.ok(rules.includes(`'${level}'`), `Difficulty tier ${level} must be defined`);
+    assert.ok(appTsx.includes(`${level}:`), `UI must label difficulty tier ${level}`);
+  }
+  assert.ok(appTsx.includes('id="ai-difficulty-menu"'), 'UI must expose the compact 5-level difficulty popover');
+  assert.ok(appTsx.includes('normalizeStockfishDifficulty'), 'Saved legacy difficulty preferences must normalize cleanly');
+  assert.ok(engine.includes('function chooseBeginnerAIMove(color)'), 'Beginner fallback difficulty must be implemented');
+  assert.ok(engine.includes('function chooseMediumAIMove(color)'), 'Intermediate fallback difficulty must be implemented');
   assert.ok(engine.includes('const opponentMoves = getAllLegalMoves(opponentColor)'), 'Medium difficulty must consider opponent replies');
   assert.ok(engine.includes('if (moveScore <= bestScore) break'), 'Medium difficulty must prune inferior branches');
-  assert.ok(engine.includes('function chooseHardAIMove(color)'), 'Hard difficulty must be implemented');
+  assert.ok(engine.includes('function chooseHardAIMove(color)'), 'Advanced/Master fallback difficulty must be implemented');
   assert.ok(engine.includes('searchHardPosition(opponentColor, color, 2, alpha, beta, 1)'), 'Hard difficulty must search three plies');
   assert.ok(engine.includes('if (beta <= alpha) break'), 'Hard difficulty must use alpha-beta pruning');
   assert.ok(engine.includes('setAIDifficulty,'), 'AI difficulty must be exposed to the UI');
@@ -606,11 +611,19 @@ test('Stockfish FEN serialization, UCI move parsing, ELO profiles, eval display,
     'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1'
   );
 
-  // Persona + difficulty ELO scaling
-  const mentorEasy = getStockfishEloProfile('mentor', 'easy');
-  const roastMed = getStockfishEloProfile('roast', 'medium');
-  const rivalHard = getStockfishEloProfile('rival', 'hard');
-  assert.ok(mentorEasy.uciElo < roastMed.uciElo && roastMed.uciElo < rivalHard.uciElo);
+  // Persona + 5-tier non-overlapping ELO scaling
+  const b = getStockfishEloProfile('rival', 'beginner');
+  const c = getStockfishEloProfile('mentor', 'casual');
+  const i = getStockfishEloProfile('mentor', 'intermediate');
+  const a = getStockfishEloProfile('roast', 'advanced');
+  const m = getStockfishEloProfile('rival', 'master');
+  assert.ok(b.uciElo < c.uciElo && c.uciElo < i.uciElo && i.uciElo < a.uciElo && a.uciElo < m.uciElo);
+  assert.equal(b.mode, 'multipv');
+  assert.equal(c.mode, 'multipv');
+  assert.equal(i.mode, 'uci_elo');
+  assert.equal(getStockfishEloProfile('mentor', 'easy').difficulty, 'beginner');
+  assert.equal(getStockfishEloProfile('mentor', 'medium').difficulty, 'intermediate');
+  assert.equal(getStockfishEloProfile('mentor', 'hard').difficulty, 'master');
 
   // Score normalization (Black +180 => White -180)
   const normBlackLead = normalizeScoreToWhite('cp', 180, 'b');

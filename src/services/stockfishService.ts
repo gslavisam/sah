@@ -20,9 +20,18 @@ export interface StockfishBotMoveResult {
   evalState: StockfishEval;
 }
 
+interface MultiPvCandidate {
+  pvIndex: number;
+  moveUci: string;
+  sideScoreCp: number;
+  mateFromSide: number | null;
+  depth: number;
+}
+
 interface SearchOutcome {
   evalState: StockfishEval;
   bestMoveUci: string | null;
+  multiPvCandidates: MultiPvCandidate[];
 }
 
 interface QueuedSearchJob {
@@ -33,12 +42,21 @@ interface QueuedSearchJob {
   resolve: (result: SearchOutcome | null) => void;
   cancelled: boolean;
   latestScore: { whiteCp: number; mateIn: number | null; depth?: number; pvMove?: string | null };
+  multiPvMap: Map<number, MultiPvCandidate>;
   timeoutHandle: ReturnType<typeof setTimeout> | null;
 }
 
 function getFenSideToMove(fen: string): PieceColor {
   const parts = fen.trim().split(/\s+/);
   return parts[1] === 'b' ? 'b' : 'w';
+}
+
+function scoreFromSideToCp(scoreType: 'cp' | 'mate', rawValue: number): number {
+  if (scoreType === 'mate') {
+    if (rawValue === 0) return -10000;
+    return rawValue > 0 ? 10000 - rawValue * 40 : -10000 - rawValue * 40;
+  }
+  return rawValue;
 }
 
 function parseInfoLine(
@@ -48,6 +66,9 @@ function parseInfoLine(
   whiteCp?: number;
   mateIn?: number | null;
   depth?: number;
+  pvIndex: number;
+  sideScoreCp: number;
+  mateFromSide: number | null;
   pvMove?: string | null;
   isBound?: boolean;
 } | null {
@@ -62,15 +83,62 @@ function parseInfoLine(
 
   const normalized = normalizeScoreToWhite(scoreType, rawValue, sideToMove);
   const depthMatch = line.match(/\bdepth\s+(\d+)/);
+  const multiPvMatch = line.match(/\bmultipv\s+(\d+)/);
   const pvMatch = line.match(/\bpv\s+([a-h][1-8][a-h][1-8][qrbn]?)/);
 
   return {
     whiteCp: normalized.whiteCp,
     mateIn: normalized.mateIn,
     depth: depthMatch ? Number.parseInt(depthMatch[1], 10) : undefined,
+    pvIndex: multiPvMatch ? Number.parseInt(multiPvMatch[1], 10) : 1,
+    sideScoreCp: scoreFromSideToCp(scoreType, rawValue),
+    mateFromSide: scoreType === 'mate' ? rawValue : null,
     pvMove: pvMatch ? pvMatch[1] : null,
     isBound,
   };
+}
+
+function pickSubMasterMultiPvMove(
+  candidates: MultiPvCandidate[],
+  difficulty: 'beginner' | 'casual',
+  fallbackBestMove: string | null
+): string | null {
+  if (candidates.length === 0) return fallbackBestMove;
+  const sorted = [...candidates].sort((a, b) => b.sideScoreCp - a.sideScoreCp);
+  const best = sorted[0];
+
+  if (difficulty === 'casual') {
+    if (best.mateFromSide === 1 && Math.random() < 0.85) {
+      return best.moveUci;
+    }
+    const nonBlunder = sorted.filter((c) => c.sideScoreCp >= best.sideScoreCp - 220);
+    const pool = (nonBlunder.length > 0 ? nonBlunder : sorted).slice(0, 4);
+    const weights = [0.46, 0.28, 0.16, 0.1];
+    let total = 0;
+    for (let i = 0; i < pool.length; i++) total += weights[i] ?? 0.05;
+    let roll = Math.random() * total;
+    for (let i = 0; i < pool.length; i++) {
+      roll -= weights[i] ?? 0.05;
+      if (roll <= 0) return pool[i].moveUci;
+    }
+    return pool[0].moveUci;
+  }
+
+  // Beginner (~600-700 Elo): avoids immediate self-mate when safer moves exist,
+  // mixes solid moves with human-like tactical oversights across MultiPV candidates.
+  const nonInstantMate = sorted.filter((c) => c.mateFromSide !== -1);
+  const safePool = nonInstantMate.length > 0 ? nonInstantMate : sorted;
+  const withinRange = safePool.filter((c) => c.sideScoreCp >= best.sideScoreCp - 520);
+  const pool = (withinRange.length > 0 ? withinRange : safePool).slice(0, 6);
+  const weights = [0.22, 0.26, 0.24, 0.15, 0.08, 0.05];
+  let total = 0;
+  for (let i = 0; i < pool.length; i++) total += weights[i] ?? 0.04;
+  let roll = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) {
+    roll -= weights[i] ?? 0.04;
+    if (roll <= 0) return pool[i].moveUci;
+  }
+  return pool[0].moveUci;
 }
 
 class StockfishService {
@@ -247,18 +315,33 @@ class StockfishService {
 
     if (line.startsWith('info ')) {
       const parsed = parseInfoLine(line, job.sideToMove);
-      if (parsed && (!parsed.isBound || job.latestScore.depth === undefined)) {
-        if (typeof parsed.whiteCp === 'number') {
-          job.latestScore.whiteCp = parsed.whiteCp;
+      if (parsed) {
+        if (parsed.pvMove && (!parsed.isBound || !job.multiPvMap.has(parsed.pvIndex))) {
+          const existing = job.multiPvMap.get(parsed.pvIndex);
+          const nextDepth = parsed.depth ?? 0;
+          if (!existing || !parsed.isBound || nextDepth >= existing.depth) {
+            job.multiPvMap.set(parsed.pvIndex, {
+              pvIndex: parsed.pvIndex,
+              moveUci: parsed.pvMove,
+              sideScoreCp: parsed.sideScoreCp,
+              mateFromSide: parsed.mateFromSide,
+              depth: nextDepth,
+            });
+          }
         }
-        if (parsed.mateIn !== undefined) {
-          job.latestScore.mateIn = parsed.mateIn;
-        }
-        if (typeof parsed.depth === 'number') {
-          job.latestScore.depth = parsed.depth;
-        }
-        if (parsed.pvMove) {
-          job.latestScore.pvMove = parsed.pvMove;
+        if (parsed.pvIndex === 1 && (!parsed.isBound || job.latestScore.depth === undefined)) {
+          if (typeof parsed.whiteCp === 'number') {
+            job.latestScore.whiteCp = parsed.whiteCp;
+          }
+          if (parsed.mateIn !== undefined) {
+            job.latestScore.mateIn = parsed.mateIn;
+          }
+          if (typeof parsed.depth === 'number') {
+            job.latestScore.depth = parsed.depth;
+          }
+          if (parsed.pvMove) {
+            job.latestScore.pvMove = parsed.pvMove;
+          }
         }
       }
       return;
@@ -271,6 +354,9 @@ class StockfishService {
       }
       const token = line.split(/\s+/)[1] || '';
       const bestMoveUci = token && token !== '(none)' ? token : job.latestScore.pvMove || null;
+      const multiPvCandidates = Array.from(job.multiPvMap.values()).sort(
+        (a, b) => a.pvIndex - b.pvIndex
+      );
       const result: SearchOutcome = {
         evalState: {
           whiteCp: job.latestScore.whiteCp,
@@ -279,6 +365,7 @@ class StockfishService {
           depth: job.latestScore.depth,
         },
         bestMoveUci,
+        multiPvCandidates,
       };
       this.activeJob = null;
       if (!job.cancelled) {
@@ -343,6 +430,7 @@ class StockfishService {
         resolve,
         cancelled: false,
         latestScore: { whiteCp: 0, mateIn: null },
+        multiPvMap: new Map(),
         timeoutHandle: null,
       };
       this.queue.push(job);
@@ -388,6 +476,7 @@ class StockfishService {
     const outcome = await this.enqueueSearch(
       fen,
       [
+        'setoption name MultiPV value 1',
         'setoption name UCI_LimitStrength value false',
         `position fen ${fen}`,
         `go movetime ${Math.max(40, Math.round(movetimeMs))}`,
@@ -402,6 +491,7 @@ class StockfishService {
     const outcome = await this.enqueueSearch(
       fen,
       [
+        'setoption name MultiPV value 1',
         'setoption name UCI_LimitStrength value false',
         `position fen ${fen}`,
         `go movetime ${Math.max(80, Math.round(movetimeMs))}`,
@@ -424,18 +514,41 @@ class StockfishService {
   ): Promise<StockfishBotMoveResult | null> {
     if (!fen || !this.isSupportedEnvironment()) return null;
     const profile = getStockfishEloProfile(personaId, difficulty);
+    const commands =
+      profile.mode === 'multipv'
+        ? [
+            'setoption name UCI_LimitStrength value false',
+            `setoption name MultiPV value ${profile.multiPv}`,
+            `position fen ${fen}`,
+            `go depth ${profile.depth ?? 3}`,
+          ]
+        : [
+            'setoption name MultiPV value 1',
+            'setoption name UCI_LimitStrength value true',
+            `setoption name UCI_Elo value ${profile.uciElo}`,
+            `position fen ${fen}`,
+            `go movetime ${profile.movetimeMs}`,
+          ];
+
     const outcome = await this.enqueueSearch(
       fen,
-      [
-        'setoption name UCI_LimitStrength value true',
-        `setoption name UCI_Elo value ${profile.uciElo}`,
-        `position fen ${fen}`,
-        `go movetime ${profile.movetimeMs}`,
-      ],
+      commands,
       Math.max(2500, profile.movetimeMs + 1800)
     );
-    if (!outcome?.bestMoveUci) return null;
-    const parsed = parseUciMove(outcome.bestMoveUci);
+    if (!outcome) return null;
+
+    const chosenUci =
+      profile.mode === 'multipv' &&
+      (profile.difficulty === 'beginner' || profile.difficulty === 'casual')
+        ? pickSubMasterMultiPvMove(
+            outcome.multiPvCandidates,
+            profile.difficulty,
+            outcome.bestMoveUci
+          )
+        : outcome.bestMoveUci;
+
+    if (!chosenUci) return null;
+    const parsed = parseUciMove(chosenUci);
     if (!parsed) return null;
     return {
       move: parsed,

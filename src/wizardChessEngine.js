@@ -1766,7 +1766,7 @@ export function initWizardChess() {
     let gameMode = 'single';
     let playerColor = 'w'; // 'w' | 'b'
     let aiAutoPlay = true;
-    let aiDifficulty = 'easy';
+    let aiDifficulty = 'casual';
     let aiTimer = null;
     let academyMode = false;
     let academyTutorialMode = false;
@@ -4992,17 +4992,47 @@ export function initWizardChess() {
       return bestCandidates[Math.floor(Math.random() * bestCandidates.length)] || legalMoves[0];
     }
 
+    function chooseBeginnerAIMove(color) {
+      const legalMoves = getAllLegalMoves(color);
+      if (legalMoves.length === 0) return null;
+
+      const scored = legalMoves.map((m) => {
+        const piece = boardState[m.fromR][m.fromC];
+        const target = m.enPassant ? boardState[m.capturedR]?.[m.capturedC] : boardState[m.toR][m.toC];
+        let score = target ? PIECE_VALUES[target.type] * 0.85 : 0;
+        const centerDist = Math.abs(3.5 - m.toR) + Math.abs(3.5 - m.toC);
+        score += (7 - centerDist) * 4;
+        score += (Math.random() - 0.5) * 110;
+        return { move: m, score };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      const pool = scored.slice(0, Math.min(4, scored.length));
+      return pool[Math.floor(Math.random() * pool.length)]?.move || legalMoves[0];
+    }
+
+    function normalizeAIDifficulty(difficulty) {
+      if (difficulty === 'beginner' || difficulty === 'easy') return 'beginner';
+      if (difficulty === 'casual') return 'casual';
+      if (difficulty === 'intermediate' || difficulty === 'medium') return 'intermediate';
+      if (difficulty === 'advanced') return 'advanced';
+      if (difficulty === 'master' || difficulty === 'hard') return 'master';
+      return null;
+    }
+
     function chooseSmartAIMove(color) {
-      if (aiDifficulty === 'hard') return chooseHardAIMove(color);
-      return aiDifficulty === 'medium' ? chooseMediumAIMove(color) : chooseEasyAIMove(color);
+      if (aiDifficulty === 'master' || aiDifficulty === 'advanced') return chooseHardAIMove(color);
+      if (aiDifficulty === 'intermediate') return chooseMediumAIMove(color);
+      if (aiDifficulty === 'casual') return chooseEasyAIMove(color);
+      return chooseBeginnerAIMove(color);
     }
 
     function setAIDifficulty(difficulty) {
-      if (difficulty !== 'easy' && difficulty !== 'medium' && difficulty !== 'hard') {
+      const normalized = normalizeAIDifficulty(difficulty);
+      if (!normalized) {
         console.warn(`Unknown AI difficulty: ${difficulty}`);
         return false;
       }
-      aiDifficulty = difficulty;
+      aiDifficulty = normalized;
       return true;
     }
 

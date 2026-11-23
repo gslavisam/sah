@@ -37,13 +37,17 @@ import {
   type GameExportSnapshot
 } from './services/pgnService';
 import {
+  STOCKFISH_DIFFICULTY_ORDER,
   classifyPlayerMoveQuality,
   evalToDisplay,
+  getStockfishEloProfile,
+  normalizeStockfishDifficulty,
+  type StockfishDifficulty,
   type StockfishEval,
 } from './shared/chessRules';
 
 type PieceSetId = 'wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'klasicni';
-type AIDifficulty = 'easy' | 'medium' | 'hard';
+type AIDifficulty = StockfishDifficulty;
 type CameraView = 'player' | 'top';
 type PromotionPieceType = 'queen' | 'rook' | 'bishop' | 'knight';
 type AmbienceMode = 'cathedral' | 'park';
@@ -56,7 +60,7 @@ const PROMOTION_OPTIONS: { type: PromotionPieceType; label: string }[] = [
 ];
 
 const PIECE_SET_ORDER: PieceSetId[] = ['klasicni', 'wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski'];
-const AI_DIFFICULTY_ORDER: AIDifficulty[] = ['easy', 'medium', 'hard'];
+const AI_DIFFICULTY_ORDER: AIDifficulty[] = STOCKFISH_DIFFICULTY_ORDER;
 const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   wizard: 'Čarobnjački',
   ancient: 'Antički',
@@ -67,9 +71,18 @@ const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   klasicni: 'Klasični'
 };
 const AI_DIFFICULTY_NAMES: Record<AIDifficulty, string> = {
-  easy: 'Lako',
-  medium: 'Srednje',
-  hard: 'Teško'
+  beginner: 'Početnik',
+  casual: 'Rekreativac',
+  intermediate: 'Srednji',
+  advanced: 'Napredni',
+  master: 'Majstor',
+};
+const AI_DIFFICULTY_DESCRIPTIONS: Record<AIDifficulty, string> = {
+  beginner: 'Opuštena igra i učenje',
+  casual: 'Zanimljiva partija uz poneku grešku',
+  intermediate: 'Klupski standard (Stockfish)',
+  advanced: 'Jaka taktika i pritisak',
+  master: 'Ozbiljan majstorski izazov',
 };
 
 export default function App() {
@@ -101,13 +114,14 @@ export default function App() {
   const [aiDifficulty, setAIDifficulty] = useState<AIDifficulty>(() => {
     try {
       const saved = localStorage.getItem('wizard_chess_ai_difficulty');
-      if (saved === 'medium' || saved === 'hard') return saved;
-      return 'easy';
+      return normalizeStockfishDifficulty(saved, 'casual');
     } catch (error) {
       console.warn('AI difficulty preference could not be loaded.', error);
-      return 'easy';
+      return 'casual';
     }
   });
+  const [difficultyMenuOpen, setDifficultyMenuOpen] = useState(false);
+  const difficultyMenuRef = useRef<HTMLDivElement | null>(null);
   const [cameraView, setCameraView] = useState<CameraView>('player');
   const selectedPersonaRef = useRef<PersonaId>('mentor');
   const [aiMessage, setAiMessage] = useState(
@@ -425,9 +439,33 @@ export default function App() {
     setMobileSheetOpen(false);
   };
 
-  const handleToggleAIDifficulty = () => {
-    const currentIndex = AI_DIFFICULTY_ORDER.indexOf(aiDifficulty);
-    const nextDifficulty = AI_DIFFICULTY_ORDER[(currentIndex + 1) % AI_DIFFICULTY_ORDER.length];
+  useEffect(() => {
+    if (!difficultyMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (difficultyMenuRef.current && !difficultyMenuRef.current.contains(event.target as Node)) {
+        setDifficultyMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setDifficultyMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [difficultyMenuOpen]);
+
+  useEffect(() => {
+    if (isOnlineMode) {
+      setDifficultyMenuOpen(false);
+    }
+  }, [isOnlineMode]);
+
+  const handleSelectAIDifficulty = (nextDifficulty: AIDifficulty) => {
     const aiWindow = window as Window & { wizardChess?: { setAIDifficulty?: (difficulty: AIDifficulty) => boolean } };
     if (!aiWindow.wizardChess?.setAIDifficulty?.(nextDifficulty)) {
       console.warn(`Could not switch AI difficulty to ${nextDifficulty}.`);
@@ -439,6 +477,7 @@ export default function App() {
     } catch (error) {
       console.warn('AI difficulty preference could not be saved.', error);
     }
+    setDifficultyMenuOpen(false);
     setMobileSheetOpen(false);
   };
 
@@ -1878,17 +1917,60 @@ export default function App() {
           >
             {isLoadingPieceSet ? `⏳ ${PIECE_SET_NAMES[selectedPieceSet]}...` : `♟ ${PIECE_SET_NAMES[selectedPieceSet]}`}
           </button>
-          <button
-            type="button"
-            className={`hud-btn ${isOnlineMode ? 'online-hidden' : ''}`}
-            id="btn-ai-difficulty"
-            disabled={isOnlineMode}
-            title="Promeni težinu protivnika"
-            aria-label={`Promeni težinu AI protivnika. Trenutna težina: ${AI_DIFFICULTY_NAMES[aiDifficulty]}`}
-            onClick={handleToggleAIDifficulty}
+          <div
+            ref={difficultyMenuRef}
+            className={`difficulty-picker-wrap ${difficultyMenuOpen ? 'open' : ''} ${isOnlineMode ? 'online-hidden' : ''}`}
           >
-            ⚔ {AI_DIFFICULTY_NAMES[aiDifficulty]}
-          </button>
+            <button
+              type="button"
+              className={`hud-btn ${difficultyMenuOpen ? 'active' : ''}`}
+              id="btn-ai-difficulty"
+              disabled={isOnlineMode}
+              title="Izaberi težinu AI protivnika"
+              aria-haspopup="listbox"
+              aria-expanded={difficultyMenuOpen}
+              aria-label={`Izaberi težinu AI protivnika. Trenutna težina: ${AI_DIFFICULTY_NAMES[aiDifficulty]}`}
+              onClick={() => setDifficultyMenuOpen((prev) => !prev)}
+            >
+              ⚔ {AI_DIFFICULTY_NAMES[aiDifficulty]} ▾
+            </button>
+            {difficultyMenuOpen && (
+              <div
+                id="ai-difficulty-menu"
+                className="ai-difficulty-popover"
+                role="listbox"
+                aria-label="Nivo težine AI protivnika"
+              >
+                <div className="ai-difficulty-popover-header">Nivo težine</div>
+                {AI_DIFFICULTY_ORDER.map((level) => {
+                  const eloProfile = getStockfishEloProfile(selectedPersona, level);
+                  const selected = aiDifficulty === level;
+                  return (
+                    <button
+                      key={level}
+                      type="button"
+                      id={`btn-ai-difficulty-${level}`}
+                      role="option"
+                      aria-selected={selected}
+                      className={`ai-difficulty-option ${selected ? 'active' : ''}`}
+                      onClick={() => handleSelectAIDifficulty(level)}
+                    >
+                      <span className="ai-difficulty-option-top">
+                        <span className="ai-difficulty-option-name">
+                          {selected ? '✓ ' : ''}
+                          {AI_DIFFICULTY_NAMES[level]}
+                        </span>
+                        <span className="ai-difficulty-option-elo">{eloProfile.label}</span>
+                      </span>
+                      <span className="ai-difficulty-option-desc">
+                        {AI_DIFFICULTY_DESCRIPTIONS[level]}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <button
             className={`hud-btn ${isOnlineMode ? 'online-hidden' : ''}`}
             id="btn-side-toggle"

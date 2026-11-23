@@ -657,7 +657,7 @@ sequenceDiagram
 | [src/services/sceneThemes.ts](./src/services/sceneThemes.ts) | Palete svetla, magle i kamenih materijala za `mentor`, `roast` i `rival` teme u katedrali. |
 | [src/services/sceneEnvironments.ts](./src/services/sceneEnvironments.ts) | Proceduralni 3D dekorativni elementi za tri teme katedrale. |
 | [src/services/opponentHolograms.ts](./src/services/opponentHolograms.ts) | 3D hologramski avatari protivnika u katedrali (automatski skriveni u Park/Zen režimu i 2D prikazu). |
-| [src/services/stockfishService.ts](./src/services/stockfishService.ts) | Web Worker red za `/stockfish/stockfish-19-lite-single.js` (`evaluatePosition`, `getHintMove`, `chooseBotMove`), otporan na `StrictMode` remount i prekide. |
+| [src/services/stockfishService.ts](./src/services/stockfishService.ts) | Web Worker red za `/stockfish/stockfish-19-lite-single.js` (`evaluatePosition`, `getHintMove`, `chooseBotMove`), sa `MultiPV` kalibracijom za nivoe ispod 1320 Elo (`Početnik`, `Rekreativac`) i `UCI_LimitStrength` za `Srednji` / `Napredni` / `Majstor`, otporan na `StrictMode` remount. |
 | [src/services/geminiService.ts](./src/services/geminiService.ts) | Pozivi ka `/api/gemini/*` za karakterne reakcije, undo komentare i objašnjenja saveta uz bogate lokalne fallback odgovore. |
 | [src/services/pgnService.ts](./src/services/pgnService.ts) | Parsiranje PGN zapisa (`chess.js`) u 3D Tutorijal lekcije, uklanjanje `[%clk]`/`[%eval]` tagova, rekonstrukcija FEN-a po koracima, lokalno čuvanje i izvoz partija u PGN. |
 | [src/services/lichessExplorerService.ts](./src/services/lichessExplorerService.ts) | Upiti ka `explorer.lichess.ovh/masters` sa keširanjem, računanjem W/D/L procenata, listom `topGames`, preuzimanjem master PGN partija i 60s zaštitom na HTTP `429`. |

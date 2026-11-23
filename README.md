@@ -11,7 +11,7 @@
 - **Sedam setova figura:** podrazumevani dvobojni klasični Staunton GLB (`klasicni` — *Klasični*), čarobnjački GLB (`wizard`), proceduralni antički (`ancient`), „Zmajevi i vitezovi“ (`dragon`), proceduralni „Srednji vek“ (`medieval`) i lenjo učitani dvobojni GLB setovi `vitez` i `srpski` (izbor se čuva u pregledaču).
 - **Stockfish 19 Lite WASM analiza, saveti i Vođeni režim:**
   - **Evaluaciona traka (`EvalBar`)** uživo u 3D HUD-u i 2D tabli, uz detekciju grešaka i blundera.
-  - **Tri nivoa AI protivnika** (*Lako*, *Srednje*, *Teško*) profilisana po ELO jačini u zavisnosti od izabranog AI lika, sa lokalnim JS minimax fallback-om.
+  - **Pet nivoa težine AI protivnika** (*Početnik*, *Rekreativac*, *Srednji*, *Napredni*, *Majstor*) od ~600 do ~2180 Elo, sa Stockfish `MultiPV` kalibracijom za niže nivoe, `UCI_LimitStrength` za više nivoe i lokalnim JS minimax fallback-om.
   - **Ručni savet (`💡 Savet`)** i **Vođeni režim (`🧭 Vođeni`)**: kada je **Vođeni režim** uključen, preporuka najboljeg poteza (tirkizno polazno i zlatno ciljno polje + objašnjenje) automatski se prikazuje na svaki tvoj potez bez potrebe da stalno klikćeš „Savet“.
 - **Tri AI komentatora na srpskom jeziku:** Alistair (*Mudri Arhimag*), Grix (*Goblin Roastmaster*) i Valerius (*Gordi Vitez*), sa unapred generisanim MP3 glasovnim replikama, proceduralnim Web Audio zvučnim efektima i opcionim Google Gemini serverskim posrednikom.
 - **Šahovska akademija i 3D Tutorijal:**
@@ -59,7 +59,7 @@ Ključ ostaje isključivo na serverskoj strani (`server.ts` posreduje kroz `/api
   - **🌳 Park / 🏛️ Katedrala** — prebacivanje između Sunčanog Parka (Zen režim) i Gotičke katedrale.
   - **🧭 Vođeni** — uključuje/isključuje automatsku preporuku za svaki tvoj potez (dostupno i u 2D tabli).
 - **Kapsula „Partija“:** **⏳ Vrati** (`U` ili `Ctrl+Z`), **⚡ AI** (odmah pokreće AI potez), **🔄 Nova** (nova partija), **⬇ PGN** (preuzimanje PGN zapisa odigrane partije).
-- **Kapsula „Podešavanja“:** **♟ Set figura** (7 setova), **⚔ Lako / Srednje / Teško**, **⮂ Igraj crnim / belim**, **🎥 Igrač / Odozgo**, **👁 Sakrij [H]**.
+- **Kapsula „Podešavanja“:** **♟ Set figura** (7 setova), **⚔ Težina AI** (5 nivoa: *Početnik*, *Rekreativac*, *Srednji*, *Napredni*, *Majstor*), **⮂ Igraj crnim / belim**, **🎥 Igrač / Odozgo**, **👁 Sakrij [H]**.
 - Na dodirnom ekranu: prevlačenje jednim prstom rotira kameru, prevlačenje sa dva prsta pomera pogled, a štipanje zumira.
 
 ## Komande

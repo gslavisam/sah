@@ -589,8 +589,34 @@ export function get2DBoardOrientation(playerColor: PieceColor, flipped: boolean)
 }
 
 export type StockfishPersonaId = 'mentor' | 'roast' | 'rival';
-export type StockfishDifficulty = 'easy' | 'medium' | 'hard';
+export type StockfishDifficulty =
+  | 'beginner'
+  | 'casual'
+  | 'intermediate'
+  | 'advanced'
+  | 'master';
+export type LegacyStockfishDifficulty = 'easy' | 'medium' | 'hard';
 export type MoveQuality = 'good' | 'inaccuracy' | 'mistake' | 'blunder';
+
+export const STOCKFISH_DIFFICULTY_ORDER: StockfishDifficulty[] = [
+  'beginner',
+  'casual',
+  'intermediate',
+  'advanced',
+  'master',
+];
+
+export function normalizeStockfishDifficulty(
+  difficulty: string | null | undefined,
+  fallback: StockfishDifficulty = 'casual'
+): StockfishDifficulty {
+  if (difficulty === 'beginner' || difficulty === 'easy') return 'beginner';
+  if (difficulty === 'casual') return 'casual';
+  if (difficulty === 'intermediate' || difficulty === 'medium') return 'intermediate';
+  if (difficulty === 'advanced') return 'advanced';
+  if (difficulty === 'master' || difficulty === 'hard') return 'master';
+  return fallback;
+}
 
 export interface FenBoardPiece {
   type: PieceType;
@@ -847,38 +873,54 @@ export function parseFenPosition(fen: string = DEFAULT_START_FEN): ChessRulesSta
 
 export function getStockfishEloProfile(
   personaId: StockfishPersonaId | string,
-  difficulty: StockfishDifficulty | string
+  difficulty: StockfishDifficulty | LegacyStockfishDifficulty | string
 ): {
+  difficulty: StockfishDifficulty;
   uciElo: number;
   movetimeMs: number;
+  mode: 'multipv' | 'uci_elo';
+  multiPv: number;
+  depth?: number;
   label: string;
 } {
   const persona: StockfishPersonaId =
     personaId === 'roast' || personaId === 'rival' ? personaId : 'mentor';
-  const diff: StockfishDifficulty =
-    difficulty === 'medium' || difficulty === 'hard' ? difficulty : 'easy';
+  const diff = normalizeStockfishDifficulty(difficulty, 'casual');
 
-  const table: Record<StockfishPersonaId, Record<StockfishDifficulty, { uciElo: number; movetimeMs: number }>> = {
+  const table: Record<
+    StockfishPersonaId,
+    Record<
+      StockfishDifficulty,
+      { uciElo: number; movetimeMs: number; mode: 'multipv' | 'uci_elo'; multiPv: number; depth?: number }
+    >
+  > = {
     mentor: {
-      easy: { uciElo: 1320, movetimeMs: 110 },
-      medium: { uciElo: 1500, movetimeMs: 150 },
-      hard: { uciElo: 1750, movetimeMs: 210 },
+      beginner: { uciElo: 600, movetimeMs: 90, mode: 'multipv', multiPv: 8, depth: 2 },
+      casual: { uciElo: 1000, movetimeMs: 120, mode: 'multipv', multiPv: 5, depth: 4 },
+      intermediate: { uciElo: 1320, movetimeMs: 130, mode: 'uci_elo', multiPv: 1 },
+      advanced: { uciElo: 1600, movetimeMs: 175, mode: 'uci_elo', multiPv: 1 },
+      master: { uciElo: 2000, movetimeMs: 240, mode: 'uci_elo', multiPv: 1 },
     },
     roast: {
-      easy: { uciElo: 1400, movetimeMs: 120 },
-      medium: { uciElo: 1650, movetimeMs: 160 },
-      hard: { uciElo: 1950, movetimeMs: 220 },
+      beginner: { uciElo: 650, movetimeMs: 95, mode: 'multipv', multiPv: 7, depth: 2 },
+      casual: { uciElo: 1060, movetimeMs: 125, mode: 'multipv', multiPv: 5, depth: 4 },
+      intermediate: { uciElo: 1370, movetimeMs: 140, mode: 'uci_elo', multiPv: 1 },
+      advanced: { uciElo: 1660, movetimeMs: 185, mode: 'uci_elo', multiPv: 1 },
+      master: { uciElo: 2080, movetimeMs: 250, mode: 'uci_elo', multiPv: 1 },
     },
     rival: {
-      easy: { uciElo: 1550, movetimeMs: 130 },
-      medium: { uciElo: 1850, movetimeMs: 180 },
-      hard: { uciElo: 2200, movetimeMs: 240 },
+      beginner: { uciElo: 700, movetimeMs: 100, mode: 'multipv', multiPv: 6, depth: 2 },
+      casual: { uciElo: 1120, movetimeMs: 130, mode: 'multipv', multiPv: 4, depth: 4 },
+      intermediate: { uciElo: 1420, movetimeMs: 150, mode: 'uci_elo', multiPv: 1 },
+      advanced: { uciElo: 1720, movetimeMs: 195, mode: 'uci_elo', multiPv: 1 },
+      master: { uciElo: 2180, movetimeMs: 260, mode: 'uci_elo', multiPv: 1 },
     },
   };
 
   const entry = table[persona][diff];
   return {
     ...entry,
+    difficulty: diff,
     label: `Elo ${entry.uciElo}`,
   };
 }
