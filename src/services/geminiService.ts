@@ -271,7 +271,7 @@ class GeminiService {
       return null;
     }
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3800);
+    const timeoutId = setTimeout(() => controller.abort(), 8500);
     try {
       const res = await fetch('/api/gemini/generate', {
         method: 'POST',

@@ -9,6 +9,7 @@ interface Props {
   isLoading: boolean;
   hintDisabled?: boolean;
   zenMode?: boolean;
+  guidedMode?: boolean;
   onRequestHint: () => void;
 }
 
@@ -19,6 +20,7 @@ export const AIBubble: React.FC<Props> = ({
   isLoading,
   hintDisabled = false,
   zenMode = false,
+  guidedMode = false,
   onRequestHint,
 }) => {
   const [minimized, setMinimized] = useState(false);
@@ -61,7 +63,13 @@ export const AIBubble: React.FC<Props> = ({
           <span className="ai-avatar">{persona.avatar}</span>
           <div className="ai-meta">
             <span className="ai-name">{persona.name}</span>
-            <span className="ai-title">{zenMode ? 'Central Park · Zen tekstualni saveti' : persona.title}</span>
+            <span className="ai-title">
+              {guidedMode
+                ? 'Vođeni režim · automatski saveti'
+                : zenMode
+                  ? 'Central Park · Zen tekstualni saveti'
+                  : persona.title}
+            </span>
           </div>
         </div>
         <div className="ai-bubble-actions">

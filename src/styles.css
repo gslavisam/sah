@@ -314,6 +314,12 @@ body.cinematic-ui-hidden .mobile-controls-trigger {
   color: #dcfce7;
 }
 
+#hud-dock .hud-btn.guided-active {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.24), rgba(212, 175, 55, 0.14));
+  border-color: rgba(56, 189, 248, 0.72);
+  color: #e0f2fe;
+}
+
 /* Desktop: hide mobile-only elements in the dock */
 #hud-dock .mobile-sheet-handle-wrap,
 #hud-dock .mobile-sheet-header,
@@ -1025,7 +1031,8 @@ body.cinematic-ui-hidden .restore-ui-button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px 10px;
   padding-bottom: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -2370,6 +2377,24 @@ body.academy-puzzle-active #checkmate-overlay {
 .chess-2d-btn-hint:hover:not(:disabled) {
   background: rgba(245, 158, 11, 0.28);
   border-color: rgba(245, 158, 11, 0.72);
+}
+
+.chess-2d-btn-guided {
+  background: rgba(56, 189, 248, 0.12);
+  color: #bae6fd;
+  border-color: rgba(56, 189, 248, 0.36);
+}
+
+.chess-2d-btn-guided:hover:not(:disabled) {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.65);
+}
+
+.chess-2d-btn-guided.active {
+  background: rgba(56, 189, 248, 0.28);
+  color: #f0f9ff;
+  border-color: rgba(56, 189, 248, 0.8);
+  font-weight: 700;
 }
 
 .chess-2d-btn:disabled {

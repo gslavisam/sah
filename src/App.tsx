@@ -142,6 +142,16 @@ export default function App() {
   customLessonsRef.current = customLessons;
   const [hasPlayedMoves, setHasPlayedMoves] = useState(false);
   const [is2DMode, setIs2DMode] = useState(false);
+  const [guidedMode, setGuidedMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('wizard_chess_guided_mode') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const guidedModeRef = useRef(guidedMode);
+  guidedModeRef.current = guidedMode;
+  const guidedReqSeqRef = useRef(0);
   const [ambience, setAmbience] = useState<AmbienceMode>(() => {
     try {
       const saved = localStorage.getItem('wizard_chess_ambience');
@@ -206,6 +216,11 @@ export default function App() {
     };
     ambienceWindow.wizardChess?.setAmbienceMode?.(ambience);
     voiceService.setAmbienceMuted(ambience === 'park');
+    if (guidedModeRef.current) {
+      window.setTimeout(() => {
+        void runMoveHint({ isGuided: true, awardXp: false });
+      }, 180);
+    }
   }, []);
 
   useEffect(() => {
@@ -221,7 +236,7 @@ export default function App() {
     if (!isLoadingAI) return;
     const watchdog = setTimeout(() => {
       setIsLoadingAI(false);
-    }, 6500);
+    }, 9000);
     return () => clearTimeout(watchdog);
   }, [isLoadingAI]);
 
@@ -237,6 +252,7 @@ export default function App() {
         setAcademyVisible(false);
         setPendingPromotion(null);
         aiRequestSeqRef.current += 1;
+        guidedReqSeqRef.current += 1;
         setIsLoadingAI(false);
         evalReqSeqRef.current += 1;
         stockfishService.cancelPending();
@@ -458,6 +474,14 @@ export default function App() {
   }, [ambience]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem('wizard_chess_guided_mode', guidedMode ? '1' : '0');
+    } catch (error) {
+      console.warn('Guided mode preference could not be saved.', error);
+    }
+  }, [guidedMode]);
+
+  useEffect(() => {
     const handlePieceSetLoading = (event: Event) => {
       const detail = (event as CustomEvent<{ setId?: PieceSetId; loading?: boolean; failed?: boolean }>).detail;
       setIsLoadingPieceSet(Boolean(detail?.loading));
@@ -535,6 +559,10 @@ export default function App() {
       }
 
       const reqId = ++aiRequestSeqRef.current;
+      if (guidedModeRef.current) {
+        void runMoveHint({ isGuided: true, awardXp: false });
+        return;
+      }
       setIsLoadingAI(true);
       try {
         const reaction = await geminiService.getUndoReaction(selectedPersonaRef.current);
@@ -666,6 +694,23 @@ export default function App() {
           }
         }
 
+        if (
+          !detail.gameOver &&
+          !isOnlineModeRef.current &&
+          !academyVisibleRef.current &&
+          guidedModeRef.current &&
+          detail.currentTurn === detail.playerColor
+        ) {
+          if (reqId === aiRequestSeqRef.current) {
+            void runMoveHint({
+              isGuided: true,
+              awardXp: false,
+              checkAlert: detail.inCheck,
+            });
+          }
+          return;
+        }
+
         const shouldCommentWithAI =
           isOnlineModeRef.current ||
           !isPlayerMove ||
@@ -699,6 +744,7 @@ export default function App() {
       const detail = (e as CustomEvent<{ playerColor?: 'w' | 'b' }>).detail;
       setHasPlayedMoves(false);
       aiRequestSeqRef.current += 1;
+      guidedReqSeqRef.current += 1;
       evalReqSeqRef.current += 1;
       setIsLoadingAI(false);
       setIsEvaluating(false);
@@ -708,12 +754,23 @@ export default function App() {
         stockfishService.newGame();
         setEvalState({ whiteCp: 0, mateIn: null });
       }
+      const nextColor = detail?.playerColor === 'b' ? 'b' : 'w';
       if (detail?.playerColor === 'w' || detail?.playerColor === 'b') {
         setPlayerColor(detail.playerColor);
       }
       const p = PERSONAS[selectedPersonaRef.current];
       setAiVoiceCue(undefined);
       setAiMessage(`Nova partija je započeta na oltaru! ${p.name} je spreman za tvoj potez.`);
+      if (
+        guidedModeRef.current &&
+        nextColor === 'w' &&
+        !isOnlineModeRef.current &&
+        !academyVisibleRef.current
+      ) {
+        window.setTimeout(() => {
+          void runMoveHint({ isGuided: true, awardXp: false });
+        }, 80);
+      }
     };
 
     const handleUndoSyncEvent = (e: Event) => {
@@ -808,6 +865,11 @@ export default function App() {
           setEvalState(evalRes);
         }
       });
+      if (guidedModeRef.current) {
+        window.setTimeout(() => {
+          void runMoveHint({ isGuided: true, awardXp: false });
+        }, 60);
+      }
     }
   };
 
@@ -1077,6 +1139,11 @@ export default function App() {
         ? `Preuzeo si poziciju iz lekcije „${lesson?.name || 'Akademija'}“ (${preferredSide === 'w' ? 'beli' : 'crni'}). Tvoj potez!`
         : `Nastavljaš iz lekcije „${lesson?.name || 'Akademija'}“. ${personaName} povlači odgovor!`
     );
+    if (guidedModeRef.current && turnNow === preferredSide) {
+      window.setTimeout(() => {
+        void runMoveHint({ isGuided: true, awardXp: false });
+      }, 80);
+    }
   };
 
   const handleLeaveTutorial = () => {
@@ -1226,62 +1293,131 @@ export default function App() {
     }
   };
 
-  const handleRequestHint = async () => {
+  const runMoveHint = async (options?: {
+    isGuided?: boolean;
+    awardXp?: boolean;
+    checkAlert?: boolean;
+  }) => {
+    const isGuided = Boolean(options?.isGuided);
     if (isOnlineModeRef.current || academyVisibleRef.current) return;
-    progressionService.awardHint();
-    const reqId = ++aiRequestSeqRef.current;
-    setIsLoadingAI(true);
-    try {
-      const win = window as unknown as {
-        wizardChess?: {
-          getBoardState?: () => ({ type: string; color: 'w' | 'b' } | null)[][];
-          getFen?: () => string;
-          showHintHighlight?: (fromR: number, fromC: number, toR: number, toC: number) => void;
-          getGameContext?: () => {
-            currentTurn: 'w' | 'b';
-            fen?: string;
-            legalMovesSummary?: string[];
-          };
+    if (isGuided && !guidedModeRef.current) return;
+
+    const win = window as unknown as {
+      wizardChess?: {
+        getBoardState?: () => ({ type: string; color: 'w' | 'b' } | null)[][];
+        getFen?: () => string;
+        showHintHighlight?: (fromR: number, fromC: number, toR: number, toC: number) => void;
+        getFallbackBestMove?: () => {
+          fromR: number;
+          fromC: number;
+          toR: number;
+          toC: number;
+          fromSquare: string;
+          toSquare: string;
+          pieceType?: string;
+          promotion?: string;
+        } | null;
+        getGameContext?: () => {
+          currentTurn: 'w' | 'b';
+          playerColor?: 'w' | 'b';
+          gameOver?: boolean;
+          inCheck?: boolean;
+          fen?: string;
+          legalMovesSummary?: string[];
         };
       };
-      const ctx = win.wizardChess?.getGameContext?.();
+    };
+
+    const ctx = win.wizardChess?.getGameContext?.();
+    if (isGuided && (!ctx || ctx.gameOver || ctx.currentTurn !== ctx.playerColor)) {
+      return;
+    }
+
+    if (options?.awardXp) {
+      progressionService.awardHint();
+    }
+
+    const reqId = ++aiRequestSeqRef.current;
+    const guidedSeq = ++guidedReqSeqRef.current;
+    setIsLoadingAI(true);
+
+    try {
       const fen = ctx?.fen || win.wizardChess?.getFen?.() || '';
       let stockfishHint: StockfishHintContext | null = null;
 
-      if (fen) {
-        const hintRes = await stockfishService.getHintMove(fen, 240);
-        if (reqId !== aiRequestSeqRef.current) return;
-        if (hintRes) {
+      const hintRes = fen ? await stockfishService.getHintMove(fen, isGuided ? 210 : 240) : null;
+      if (
+        reqId !== aiRequestSeqRef.current ||
+        guidedSeq !== guidedReqSeqRef.current ||
+        isOnlineModeRef.current ||
+        academyVisibleRef.current
+      ) {
+        return;
+      }
+      if (isGuided && !guidedModeRef.current) return;
+
+      const latestCtx = win.wizardChess?.getGameContext?.();
+      if (isGuided && (!latestCtx || latestCtx.gameOver || latestCtx.currentTurn !== latestCtx.playerColor)) {
+        return;
+      }
+
+      if (hintRes) {
+        win.wizardChess?.showHintHighlight?.(
+          hintRes.move.fromR,
+          hintRes.move.fromC,
+          hintRes.move.toR,
+          hintRes.move.toC
+        );
+        const boardSnapshot = win.wizardChess?.getBoardState?.();
+        const movingPiece = boardSnapshot?.[hintRes.move.fromR]?.[hintRes.move.fromC];
+        const evalDisplay = evalToDisplay(hintRes.evalState);
+        setEvalState(hintRes.evalState);
+        evalBeforeRef.current = hintRes.evalState;
+        stockfishHint = {
+          fromSquare: hintRes.move.fromSquare,
+          toSquare: hintRes.move.toSquare,
+          pieceType: movingPiece?.type,
+          promotion: hintRes.move.promotion,
+          evalLabel: evalDisplay.label,
+        };
+      } else {
+        const fallbackMove = win.wizardChess?.getFallbackBestMove?.();
+        if (fallbackMove) {
           win.wizardChess?.showHintHighlight?.(
-            hintRes.move.fromR,
-            hintRes.move.fromC,
-            hintRes.move.toR,
-            hintRes.move.toC
+            fallbackMove.fromR,
+            fallbackMove.fromC,
+            fallbackMove.toR,
+            fallbackMove.toC
           );
-          const boardSnapshot = win.wizardChess?.getBoardState?.();
-          const movingPiece = boardSnapshot?.[hintRes.move.fromR]?.[hintRes.move.fromC];
-          const evalDisplay = evalToDisplay(hintRes.evalState);
-          setEvalState(hintRes.evalState);
-          evalBeforeRef.current = hintRes.evalState;
           stockfishHint = {
-            fromSquare: hintRes.move.fromSquare,
-            toSquare: hintRes.move.toSquare,
-            pieceType: movingPiece?.type,
-            promotion: hintRes.move.promotion,
-            evalLabel: evalDisplay.label,
+            fromSquare: fallbackMove.fromSquare,
+            toSquare: fallbackMove.toSquare,
+            pieceType: fallbackMove.pieceType,
+            promotion: fallbackMove.promotion,
           };
         }
       }
 
       const hint = await geminiService.getHint(
         selectedPersonaRef.current,
-        ctx?.currentTurn || 'w',
-        ctx?.legalMovesSummary,
+        latestCtx?.currentTurn || ctx?.currentTurn || 'w',
+        latestCtx?.legalMovesSummary || ctx?.legalMovesSummary,
         stockfishHint
       );
-      if (reqId === aiRequestSeqRef.current) {
+      if (
+        reqId === aiRequestSeqRef.current &&
+        guidedSeq === guidedReqSeqRef.current &&
+        !isOnlineModeRef.current &&
+        !academyVisibleRef.current &&
+        (!isGuided || guidedModeRef.current)
+      ) {
+        const inCheckNow = options?.checkAlert || latestCtx?.inCheck;
+        const cleanHint = isGuided ? hint.replace(/^💡\s*/, '') : hint;
+        const formattedMessage = isGuided
+          ? `${inCheckNow ? '⚠️ Šah! ' : ''}🧭 Vođeni režim: ${cleanHint}`
+          : hint;
         setAiVoiceCue('hint');
-        setAiMessage(hint);
+        setAiMessage(formattedMessage);
       }
     } catch (err) {
       console.warn('Hint error:', err);
@@ -1289,6 +1425,27 @@ export default function App() {
       if (reqId === aiRequestSeqRef.current) {
         setIsLoadingAI(false);
       }
+    }
+  };
+
+  const handleRequestHint = async () => {
+    await runMoveHint({ isGuided: false, awardXp: true });
+  };
+
+  const handleToggleGuidedMode = () => {
+    if (isOnlineModeRef.current) return;
+    const next = !guidedModeRef.current;
+    guidedModeRef.current = next;
+    setGuidedMode(next);
+    setMobileSheetOpen(false);
+    if (next) {
+      void runMoveHint({ isGuided: true, awardXp: false });
+    } else {
+      guidedReqSeqRef.current += 1;
+      const win = window as Window & { wizardChess?: { clearHintHighlight?: () => void } };
+      win.wizardChess?.clearHintHighlight?.();
+      setAiVoiceCue(undefined);
+      setAiMessage('Vođeni režim je isključen. Igraj samostalno ili zatraži 💡 Savet kada poželiš.');
     }
   };
 
@@ -1370,6 +1527,7 @@ export default function App() {
         isLoading={isLoadingAI}
         hintDisabled={isOnlineMode}
         zenMode={ambience === 'park'}
+        guidedMode={guidedMode}
         onRequestHint={handleRequestHint}
       />
 
@@ -1536,6 +1694,17 @@ export default function App() {
             }}
           >
             {ambience === 'park' ? '🏛️ Katedrala (Duel)' : '🌳 Park (Čista 3D tabla)'}
+          </button>
+          <button
+            type="button"
+            className={`hud-btn ${guidedMode ? 'guided-active' : ''} ${isOnlineMode ? 'online-hidden' : ''}`}
+            id="btn-guided-mode"
+            aria-pressed={guidedMode}
+            disabled={isOnlineMode}
+            title="Vođeni režim: uvek prikazuje preporuku za tvoj sledeći potez"
+            onClick={handleToggleGuidedMode}
+          >
+            {guidedMode ? '🧭 Vođeni: ON' : '🧭 Vođeni'}
           </button>
         </div>
 
@@ -1731,7 +1900,9 @@ export default function App() {
         isEvaluating={isEvaluating}
         hintMessage={aiMessage}
         isLoadingHint={isLoadingAI}
+        guidedMode={guidedMode}
         onRequestHint={handleRequestHint}
+        onToggleGuidedMode={handleToggleGuidedMode}
         onClose={() => setIs2DMode(false)}
         onUndoMove={handleUndoMove}
         onRequestPromotion={setPendingPromotion}

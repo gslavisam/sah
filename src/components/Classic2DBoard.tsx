@@ -18,7 +18,9 @@ interface Props {
   isEvaluating?: boolean;
   hintMessage?: string;
   isLoadingHint?: boolean;
+  guidedMode?: boolean;
   onRequestHint?: () => void;
+  onToggleGuidedMode?: () => void;
   onClose: () => void;
   onUndoMove: () => void;
   onRequestPromotion: (req: PromotionRequest) => void;
@@ -62,7 +64,9 @@ export const Classic2DBoard: React.FC<Props> = ({
   isEvaluating = false,
   hintMessage,
   isLoadingHint = false,
+  guidedMode = false,
   onRequestHint,
+  onToggleGuidedMode,
   onClose,
   onUndoMove,
   onRequestPromotion,
@@ -89,6 +93,7 @@ export const Classic2DBoard: React.FC<Props> = ({
         getPlayerColor?: () => PieceColor;
         getLastMove?: () => LastMove | null;
         getDrawReason?: () => DrawReason;
+        getHintHighlight?: () => HintCoords | null;
         isKingInCheck?: (c?: PieceColor) => boolean;
         isGameOver?: () => boolean;
       };
@@ -115,6 +120,9 @@ export const Classic2DBoard: React.FC<Props> = ({
 
     const dr = win.wizardChess.getDrawReason?.() || null;
     setDrawReason(dr);
+
+    const activeHint = win.wizardChess.getHintHighlight?.() || null;
+    setHintCoords(activeHint);
   }, []);
 
   useEffect(() => {
@@ -301,6 +309,22 @@ export const Classic2DBoard: React.FC<Props> = ({
                 >
                   ⚡ AI
                 </button>
+                {onToggleGuidedMode && (
+                  <button
+                    type="button"
+                    id="btn-2d-guided"
+                    className={`chess-2d-btn chess-2d-btn-guided ${guidedMode ? 'active' : ''}`}
+                    aria-pressed={guidedMode}
+                    onClick={onToggleGuidedMode}
+                    title={
+                      guidedMode
+                        ? 'Vođeni režim je uključen (automatska preporuka za tvoj potez)'
+                        : 'Uključi Vođeni režim (stalna automatska preporuka poteza)'
+                    }
+                  >
+                    {guidedMode ? '🧭 Vođeni ON' : '🧭 Vođeni'}
+                  </button>
+                )}
                 {onRequestHint && (
                   <button
                     type="button"
@@ -416,6 +440,8 @@ export const Classic2DBoard: React.FC<Props> = ({
         <div className="chess-2d-footer">
           {!isOnlineMode && hintCoords && hintMessage ? (
             <span className="chess-2d-active-hint">{hintMessage}</span>
+          ) : !isOnlineMode && guidedMode && isLoadingHint && !gameOver ? (
+            <span className="chess-2d-active-hint">🧭 Vođeni režim traži najbolji potez...</span>
           ) : (
             <span>
               💡 <strong>Savet:</strong> Klikni na figuru da vidiš legalna polja. Prečica <strong>U</strong> vraća potez, a <strong>Esc</strong> ili dugme gore vraća te u 3D katedralu.

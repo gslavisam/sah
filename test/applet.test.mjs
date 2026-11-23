@@ -533,6 +533,7 @@ test('Gemini server proxy uses active low-latency model, User-Agent header, and 
   assert.ok(serverSrc.includes("model: 'gemini-3.1-flash-lite'"), 'Server must use active low-latency gemini-3.1-flash-lite model');
   assert.ok(serverSrc.includes('ThinkingLevel.MINIMAL'), 'Server must configure minimal thinking latency for short commentary');
   assert.ok(serverSrc.includes('abortSignal: AbortSignal.timeout'), 'Server Gemini request must have an abort timeout');
+  assert.ok(serverSrc.includes("errName === 'AbortError'"), 'Server Gemini proxy must handle AbortError gracefully without 502 error logs');
   assert.ok(serverSrc.includes("'User-Agent': 'aistudio-build'"), 'GoogleGenAI client must set User-Agent header');
   assert.ok(geminiSrc.includes('new AbortController()'), 'Client proxy must abort stalled requests so AI bubble never spins forever');
 });
@@ -1122,6 +1123,35 @@ test('Academy PGN import/delete, online Lichess/Chess.com importer UI, engine ge
   assert.ok(engineSrc.includes('gameStartingFen = getFen()'));
   assert.ok(engineSrc.includes('getMoveHistory,'));
 });
+
+test('Guided Mode (Vođeni režim) wires auto-recommendation triggers, localStorage persistence, engine fallback, and HUD/2D toggles', () => {
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const bubbleTsx = fs.readFileSync(path.join(ROOT, 'src/components/AIBubble.tsx'), 'utf-8');
+  const board2dTsx = fs.readFileSync(path.join(ROOT, 'src/components/Classic2DBoard.tsx'), 'utf-8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const cssSrc = fs.readFileSync(path.join(ROOT, 'src/styles.css'), 'utf-8');
+
+  assert.ok(appTsx.includes("localStorage.getItem('wizard_chess_guided_mode')"));
+  assert.ok(appTsx.includes('handleToggleGuidedMode'));
+  assert.ok(appTsx.includes('runMoveHint('));
+  assert.ok(appTsx.includes('id="btn-guided-mode"'));
+  assert.ok(appTsx.includes('guidedMode={guidedMode}'));
+  assert.ok(appTsx.includes('onToggleGuidedMode={handleToggleGuidedMode}'));
+
+  assert.ok(!bubbleTsx.includes('id="btn-bubble-guided"'), 'AIBubble keeps only Zen/Voice and Savet actions');
+  assert.ok(bubbleTsx.includes('guidedMode = false'));
+
+  assert.ok(board2dTsx.includes('id="btn-2d-guided"'));
+  assert.ok(board2dTsx.includes('getHintHighlight'));
+
+  assert.ok(engineSrc.includes('function getFallbackBestMove()'));
+  assert.ok(engineSrc.includes('getHintHighlight:'));
+  assert.ok(engineSrc.includes('getFallbackBestMove,'));
+
+  assert.ok(cssSrc.includes('#hud-dock .hud-btn.guided-active'));
+  assert.ok(cssSrc.includes('.chess-2d-btn-guided.active'));
+});
+
 
 
 

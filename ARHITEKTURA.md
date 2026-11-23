@@ -1,233 +1,717 @@
 # Arhitektura projekta — Wizard Chess 3D
 
-Ovaj dokument opisuje kako je projekat trenutno organizovan: gde se pokreće aplikacija, koji moduli imaju koje odgovornosti i kako podaci prolaze kroz interfejs, šahovski engine i servise. Opis prati postojeći kod; ne predstavlja predlog za buduću refaktorizaciju.
+Ovaj dokument opisuje trenutnu full-stack arhitekturu projekta **Wizard Chess 3D**: organizaciju klijentskog React/Three.js sloja, integraciju **Stockfish 19 Lite WASM** endžina, **Vođeni režim**, PGN/Lichess/Chess.com servise, kao i Node/TypeScript backend server za korisničke naloge, Gemini posredovanje i onlajn 1-na-1 partije. Opis u potpunosti prati stvarno stanje u kodu.
 
-## 1. Pregled sistema
+---
 
-Wizard Chess 3D je klijentska web-aplikacija. React prikazuje HUD i povezuje UI sa servisima, dok `wizardChessEngine.js` upravlja Three.js scenom, figurama, potezima i lokalnim AI protivnikom. Dva dela komuniciraju preko DOM elemenata, događaja pregledača i `window.wizardChess` API-ja.
+## 1. Pregled sistema (Struktura direktorijuma)
+
+Wizard Chess 3D se sastoji iz klijentske aplikacije (React 19 + TypeScript + Three.js) i jedinstvenog Node.js/Express servera (`server.ts`, port `3000`) koji opslužuje Vite dev middleware / produkcijski `dist/`, SQLite autentifikaciju, serverski Gemini proxy i WebSocket (`/ws`) za onlajn duele uz autoritativnu validaciju šahovskih pravila.
 
 ```text
 index.html
   └── src/main.tsx
        ├── React StrictMode
        └── src/App.tsx
-            ├── HUD i kontrolne komponente
-            ├── geminiService ── Google Gemini (opciono) / lokalni fallback
-            ├── progressionService ── localStorage
-            ├── Academy ── puzzleCatalog
-            ├── sceneThemes ── tipizirane postavke ambijenta
-            ├── sceneEnvironments ── proceduralne 3D grupe ambijenta
-            ├── voiceService ── lokalni MP3 audio
-             └── soundService ── proceduralni Web Audio zvučni efekti (SFX)
+            ├── HUD (3 kapsule: Režimi, Partija, Podešavanja) i modali
+            │    (AIBubble, Academy, AccountModal, OnlineDuelModal, OnlineMatchBar, EvalBar, Classic2DBoard)
+            ├── stockfishService ── Web Worker (public/stockfish/stockfish-19-lite-single.*)
+            ├── authService & multiplayerService ── REST API (/api/auth, /api/profile) & WebSocket (/ws)
+            ├── pgnService, lichessExplorerService & onlineChessImportService
+            ├── geminiService ── serverski proxy (/api/gemini/*) / lokalni fallback
+            ├── progressionService & academyProgression ── localStorage + sinhronizacija sa nalogom
+            ├── sceneThemes, sceneEnvironments, opponentHolograms & outdoorParkEnv ── Three.js ambijenti
+            ├── voiceService & soundService ── lokalni MP3 glasovi i Web Audio SFX
+            └── initWizardChess() ── src/wizardChessEngine.js (Three.js + lokalni engine + window.wizardChess API)
 
-src/App.tsx ── initWizardChess()
-  └── src/wizardChessEngine.js
-       ├── Three.js renderer, scena, kamera i kontrole
-       ├── proceduralni ambijenti po izabranoj temi
-       ├── lokalna šahovska pravila i stanje partije
-       ├── heuristički AI protivnik
-       ├── GLB modeli/animacije i proceduralni antički set
-       ├── DOM HUD događaji i browser CustomEvent-i
-       └── window.wizardChess programatski API
+server.ts (Express 5 + WebSocket + Vite/dist)
+  ├── src/server/authStore.ts ── SQLite (node:sqlite) korisnički nalozi, sesije, XP i istorija partija
+  ├── /api/gemini/* ── @google/genai proxy (gemini-3.1-flash-lite, GEMINI_API_KEY na serveru)
+  ├── src/shared/chessRules.ts ── deljena šahovska pravila za validaciju poteza i Stockfish ELO profile
+  └── WebSocket menadžer soba (/ws) ── kreiranje soba, autoritativni satovi i prenos poteza uživo
 
 public/assets/
-  ├── glb/                 kompresovani 3D GLB modeli
-  └── audio/voices/        unapred generisani glasovni komentari
+  ├── glb/                 kompresovani 3D modeli (.glb.gz.b64) — katedrala i 4 GLB seta figura
+  ├── audio/voices/        unapred generisani MP3 glasovni komentari (mentor, roast, rival)
+  └── stockfish/           Stockfish 19 Lite WASM binarni i single-threaded JS worker fajlovi
 ```
 
-## 2. Ulazna tačka i inicijalizacija
+---
 
-1. [index.html](./index.html) definiše osnovnu HTML stranicu i mount element `#root`, a učitava `src/main.tsx`.
-2. [src/main.tsx](./src/main.tsx) montira React aplikaciju u `#root` unutar `StrictMode` i uvozi globalne stilove iz `src/styles.css`.
-3. [src/App.tsx](./src/App.tsx) prikazuje HUD, registruje `wizardchess:move` / `wizardchess:reset` slušaoce i jednom poziva `initWizardChess()`.
-4. [src/wizardChessEngine.js](./src/wizardChessEngine.js) pravi WebGL renderer u `#canvas-container`, učitava GLB modele i zatim inicijalizuje tablu, render loop i početnu poziciju.
+## 2. Arhitekturni dijagrami (Mermaid)
 
-Engine očekuje da React prvo prikaže HUD elemente koje zatim pronalazi preko ID-jeva, kao što su `btn-reset`, `btn-ai-move` i `btn-cam-player`. Zbog te podele neki React elementi i Three.js logika dele DOM preko selektora i globalnog `window.wizardChess` objekta.
+### 2.1. Globalni koncept sistema (Visoki nivo)
 
-## 3. Mapa fajlova
+Ovaj dijagram prikazuje komunikaciju između igrača, pregledača (React + Three.js + Stockfish Web Worker), Node.js backenda (`server.ts`) i eksternih servisa.
 
-### Aplikacija i prikaz
+```mermaid
+flowchart TB
+    User(["Igrač (Pregledač / Mobilni)"])
+
+    subgraph Browser["Klijentska aplikacija (React 19 + TypeScript)"]
+        UI["React HUD, 2D Tabla i Akademija"]
+        ThreeEngine["Three.js 3D Scena (wizardChessEngine.js)"]
+        SharedClient["Deljena pravila & ELO profili (chessRules.ts)"]
+        StockfishWorker["Stockfish 19 Lite WASM (Web Worker)"]
+        AudioEngine["Glasovni MP3 i Web Audio SFX"]
+    end
+
+    subgraph Backend["Sopstveni Backend (server.ts)"]
+        RestAuth["REST API (/api/auth/*, /api/profile/*)"]
+        GeminiProxy["Gemini Proxy (/api/gemini/status, /generate)"]
+        WSHub["WebSocket Menadžer Soba (/ws)"]
+        AuthDB["AuthStore (node:sqlite + scrypt)"]
+        SharedServer["Serverska validacija (chessRules.ts)"]
+    end
+
+    subgraph External["Spoljni servisi (Opcioni / Javni)"]
+        LichessAPI["Lichess Masters & Lichess.org API"]
+        ChessComAPI["Chess.com Public API"]
+        GeminiAPI["Google Gemini API (@google/genai)"]
+    end
+
+    User <-->|Klik / Dodir / Kamera| UI
+    User <-->|3D Interakcija| ThreeEngine
+    UI <-->|CustomEvents & window.wizardChess| ThreeEngine
+    UI <--> SharedClient
+    UI <-->|Evaluacija, Savet, Vođeni režim| StockfishWorker
+    ThreeEngine <-->|AI potez po ELO profilu| StockfishWorker
+    UI --> AudioEngine
+
+    UI <-->|HTTPS JSON + Bearer Token| RestAuth
+    UI -.->|POST /api/gemini/generate| GeminiProxy
+    UI <-->|WebSocket uživo (/ws)| WSHub
+    RestAuth <--> AuthDB
+    WSHub <--> SharedServer
+    WSHub --> AuthDB
+
+    UI -.->|FEN statistika, studije, partije| LichessAPI
+    UI -.->|Mesečne arhive igrača| ChessComAPI
+    GeminiProxy -.->|GEMINI_API_KEY na serveru| GeminiAPI
+```
+
+### 2.2. Opšti dijagram klasa i modula
+
+Pregled ključnih modula na klijentu i serveru i njihovih stvarnih zavisnosti:
+
+```mermaid
+classDiagram
+    direction TB
+
+    class App {
+        -PersonaId selectedPersona
+        -AmbienceMode ambience
+        -boolean is2DMode
+        -boolean guidedMode
+        -boolean academyVisible
+        +handleSelectPersona(id)
+        +handleMoveEvent(detail)
+        +handleRequestHint()
+        +handleToggleGuidedMode()
+        +handleExportPgn()
+    }
+
+    class WizardChessEngine {
+        -THREE.Scene scene
+        -THREE.WebGLRenderer renderer
+        -BoardState boardState
+        -string currentTurn
+        +initWizardChess()
+        +executeChessMove(fromR, fromC, toR, toC, opts)
+        +setSceneTheme(themeId)
+        +setAmbienceMode(mode)
+        +setPieceSet(setId)
+        +undoPlayerMove()
+        +showHintHighlight(fromR, fromC, toR, toC)
+        +getHintHighlight()
+        +getFallbackBestMove()
+        +getGameContext()
+    }
+
+    class OutdoorParkEnv {
+        +createOutdoorParkEnvironment(scene, boardSize)
+        +dispose()
+    }
+
+    class OpponentHolograms {
+        +setPersona(personaId)
+        +setVisible(visible)
+        +setThinking(thinking)
+        +update(delta)
+    }
+
+    class StockfishService {
+        -Worker worker
+        +evaluatePosition(fen, movetimeMs)
+        +getHintMove(fen, movetimeMs)
+        +chooseBotMove(fen, personaId, difficulty)
+        +cancelPending()
+        +newGame()
+    }
+
+    class PgnService {
+        +parsePgnToLesson(pgnText)
+        +reconstructLessonFen(lesson, stepIndex)
+        +exportMovesToPgn(snapshot)
+        +downloadPgnFile(pgnText)
+    }
+
+    class LichessExplorerService {
+        +fetchLichessMasterStats(fen)
+        +getCachedLichessMasterStats(fen)
+        +fetchLichessMasterGamePgn(gameId)
+    }
+
+    class OnlineChessImportService {
+        +parseOnlineChessUrl(rawInput)
+        +fetchPgnFromOnlineUrl(rawUrl)
+        +fetchLichessUserGames(username)
+        +fetchChessComUserGames(username)
+    }
+
+    class GeminiService {
+        -boolean serverConfigured
+        +checkServerStatus()
+        +getReaction(personaId, detail)
+        +getUndoReaction(personaId)
+        +getHint(personaId, turn, moves, sfHint)
+    }
+
+    class VoiceService {
+        +isEnabled()
+        +toggleVoice()
+        +setAmbienceMuted(muted)
+        +speak(text, personaId, cue)
+    }
+
+    class SoundService {
+        +playMove()
+        +playCapture()
+        +playCheck()
+        +playCheckmate()
+        +playUndo()
+        +playBlunder()
+    }
+
+    class ProgressionService {
+        +awardMove(capture, check, mate, draw)
+        +awardHint()
+        +recordOpponentMove(capture, mate)
+        +replaceFromCloud(stats)
+    }
+
+    class AuthService {
+        -string token
+        +login(username, password)
+        +register(username, password, displayName)
+        +syncProgress(stats, academy)
+        +recordSinglePlayerMatch(match)
+    }
+
+    class MultiplayerService {
+        -WebSocket ws
+        +createRoom(timeControl, side, avatar)
+        +joinRoom(roomId, avatar)
+        +submitMove(fromR, fromC, toR, toC, promo)
+        +resign()
+        +offerDraw()
+        +requestRematch()
+    }
+
+    class ServerTS {
+        -Map~string, RoomRecord~ rooms
+        +handleAuthRoutes()
+        +handleProfileRoutes()
+        +handleGeminiProxyRoutes()
+        +handleWebSocketUpgrade()
+    }
+
+    class RoomRecord {
+        +string roomId
+        +RoomStatus status
+        +ChessRulesState chess
+        +ClockState clock
+        +PlayerSlot w
+        +PlayerSlot b
+    }
+
+    class AuthStore {
+        +registerUser(input)
+        +loginUser(input)
+        +getSessionUser(token)
+        +syncProgress(userId, stats, academy)
+        +recordMatch(userId, match)
+    }
+
+    class ChessRules {
+        +createInitialChessState()
+        +applyChessMove(state, fromR, fromC, toR, toC, promo)
+        +getLegalMovesForSquare(state, r, c)
+        +getStockfishEloProfile(personaId, difficulty)
+        +classifyPlayerMoveQuality(prev, next, color)
+        +evalToDisplay(evalState)
+    }
+
+    App --> WizardChessEngine : upravlja preko window.wizardChess
+    App --> StockfishService : eval, savet i Vođeni režim
+    App --> AuthService : prijava, profil i istorija
+    App --> MultiplayerService : 1-na-1 duel uživo
+    App --> PgnService : uvoz/izvoz partija
+    App --> GeminiService : komentari i objašnjenja
+    App --> VoiceService : MP3 glasovi
+    App --> SoundService : Web Audio SFX
+    App --> ProgressionService : XP i titule
+
+    WizardChessEngine *-- OutdoorParkEnv : parkovski Zen ambijent
+    WizardChessEngine *-- OpponentHolograms : 3D hologramski rivali
+    WizardChessEngine --> StockfishService : chooseBotMove() za AI poteze
+    OnlineChessImportService --> LichessExplorerService : fallback 404 na Masters PGN
+
+    AuthService ..> ServerTS : REST API (/api/auth, /api/profile)
+    GeminiService ..> ServerTS : REST API (/api/gemini/*)
+    MultiplayerService ..> ServerTS : WebSocket (/ws)
+
+    ServerTS *-- RoomRecord : upravlja sobama i satovima
+    ServerTS --> AuthStore : SQLite nalozi i partije
+    ServerTS --> ChessRules : serverska validacija poteza
+    App ..> ChessRules : ocena poteza i eval prikaz
+    StockfishService ..> ChessRules : ELO profili i UCI parsiranje
+```
+
+### 2.3. Modul: Frontend UI i HUD komponente
+
+Prikazuje hijerarhiju React komponenti u `src/App.tsx`, raspored donjih kontrola u 3 kapsule (`Režimi`, `Partija`, `Podešavanja`) i sinhronizaciju 2D/3D table.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class App {
+        +selectedPersona: PersonaId
+        +ambience: "cathedral" | "park"
+        +is2DMode: boolean
+        +guidedMode: boolean
+        +academyVisible: boolean
+        +onlineSession: OnlineSessionSnapshot
+    }
+
+    class AIBubble {
+        +personaId: PersonaId
+        +message: string
+        +zenMode: boolean
+        +guidedMode: boolean
+        +onRequestHint()
+    }
+
+    class PersonaSelector {
+        +selectedPersona: PersonaId
+        +onSelectPersona(id)
+    }
+
+    class PlayerLevelBar {
+        +level: number
+        +title: string
+        +xpProgress: number
+        +streak: number
+    }
+
+    class EvalBar {
+        +evalState: StockfishEval
+        +flipped: boolean
+        +isEvaluating: boolean
+        +variant: "hud" | "board2d"
+    }
+
+    class Classic2DBoard {
+        +isOpen: boolean
+        +evalState: StockfishEval
+        +guidedMode: boolean
+        +flipped: boolean
+        +onRequestHint()
+        +onToggleGuidedMode()
+        +onUndoMove()
+    }
+
+    class Chess2DPiece {
+        +type: PieceType
+        +color: "w" | "b"
+    }
+
+    class Academy {
+        +view: "home" | "puzzle" | "tutorial"
+        +importTab: "masters" | "online" | "file"
+        +customLessons: ChessAcademyLesson[]
+        +onPlayTutorialStep()
+        +onTakeOverTutorial()
+        +onImportPgn(pgnText)
+    }
+
+    class AccountModal {
+        +isOpen: boolean
+        +auth: AuthSnapshot
+        +onClose()
+    }
+
+    class OnlineDuelModal {
+        +isOpen: boolean
+        +initialTab: "create" | "join"
+        +onCreateRoom()
+        +onJoinRoom(roomId)
+    }
+
+    class OnlineMatchBar {
+        +session: OnlineSessionSnapshot
+        +onResign()
+        +onOfferDraw()
+        +onRematch()
+    }
+
+    App *-- AIBubble
+    App *-- PersonaSelector
+    App *-- PlayerLevelBar
+    App *-- EvalBar
+    App *-- Classic2DBoard
+    Classic2DBoard *-- Chess2DPiece
+    Classic2DBoard *-- EvalBar
+    App *-- Academy
+    App *-- AccountModal
+    App *-- OnlineDuelModal
+    App *-- OnlineMatchBar
+```
+
+### 2.4. Modul: 3D Engine, Ambijenti i Vizuelni resursi
+
+Unutrašnja organizacija Three.js scene, upravljanje sa 7 setova figura (GLB sa lazy-load mehanizmom i proceduralnim setovima), kamerama i prebacivanjem između Katedrale i Parka.
+
+```mermaid
+classDiagram
+    direction TB
+
+    class WizardChessEngine {
+        -THREE.Scene scene
+        -THREE.PerspectiveCamera camera
+        -OrbitControls orbitControls
+        -PieceSetId activePieceSet
+        -AmbienceMode activeAmbienceMode
+        +initWizardChess()
+        +loadAllAssets()
+        +setPieceSet(setId)
+        +setSceneTheme(themeId)
+        +setAmbienceMode(mode)
+        +setCameraPreset(preset)
+        +set2DModeActive(active)
+        +stepScene(delta)
+    }
+
+    class PieceSetManager {
+        +wizardGLB: RiggedModels
+        +vitezGLB: LazyLoadedGLB
+        +srpskiGLB: LazyLoadedGLB
+        +klasicniGLB: LazyLoadedGLB
+        +proceduralSets: Ancient | Dragon | Medieval
+        +ensureDetailedPieceSetLoaded(setId)
+    }
+
+    class SceneThemes {
+        +mentor: ThemeConfig
+        +roast: ThemeConfig
+        +rival: ThemeConfig
+    }
+
+    class SceneEnvironments {
+        +armillarySpheres: THREE.Group
+        +goblinGearsAndSparks: THREE.Group
+        +heraldicBanners: THREE.Group
+        +update(elapsed)
+    }
+
+    class OutdoorParkEnv {
+        +plazaMesh: THREE.Mesh
+        +stoneBoardOverlay: THREE.Group
+        +treesAndParasols: THREE.Group
+        +createOutdoorParkEnvironment(scene, boardSize)
+        +dispose()
+    }
+
+    class OpponentHolograms {
+        +group: THREE.Group
+        +setPersona(personaId)
+        +setVisible(visible)
+        +setThinking(thinking)
+        +update(delta)
+    }
+
+    WizardChessEngine *-- PieceSetManager : 7 setova figura
+    WizardChessEngine --> SceneThemes : svetla i magla katedrale
+    WizardChessEngine *-- SceneEnvironments : dekoracije katedrale
+    WizardChessEngine *-- OutdoorParkEnv : Sunčani Park (Zen)
+    WizardChessEngine *-- OpponentHolograms : hologrami (skriveni u Parku i 2D)
+```
+
+### 2.5. Modul: AI Engine, Analiza, PGN, Lichess/Chess.com i Akademija
+
+Povezuje Stockfish 19 WASM analizu, Vođeni režim, Gemini posredovanje, PGN uvoz/izvoz, Lichess Masters / Lichess.org / Chess.com servise i kataloge Akademije.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class StockfishService {
+        -Worker worker
+        -boolean isReady
+        +init()
+        +evaluatePosition(fen, movetimeMs)
+        +getHintMove(fen, movetimeMs)
+        +chooseBotMove(fen, personaId, difficulty)
+        +cancelPending()
+    }
+
+    class GeminiService {
+        -boolean serverConfigured
+        +checkServerStatus()
+        +getReaction(personaId, detail)
+        +getUndoReaction(personaId)
+        +getHint(personaId, turn, moves, sfHint)
+        -generateViaProxy(prompt)
+    }
+
+    class VoiceService {
+        -HTMLAudioElement currentAudio
+        -boolean enabled
+        -boolean ambienceMuted
+        +speak(text, personaId, cue)
+        +stop()
+    }
+
+    class PgnService {
+        +parsePgnToLesson(pgnText)
+        +reconstructLessonFen(lesson, step)
+        +exportMovesToPgn(snapshot)
+        +downloadPgnFile(pgnText)
+    }
+
+    class LichessExplorerService {
+        +fetchLichessMasterStats(fen)
+        +fetchLichessMasterGamePgn(gameId)
+    }
+
+    class OnlineChessImportService {
+        +parseOnlineChessUrl(input)
+        +fetchPgnFromOnlineUrl(url)
+        +fetchLichessUserGames(username)
+        +fetchChessComUserGames(username)
+    }
+
+    class AcademyCatalogs {
+        +CHESS_ACADEMY_LESSONS: 30
+        +PUZZLES: 12
+        +ACADEMY_AREAS: 3x12
+    }
+
+    class AcademyProgression {
+        +markCompleted(area, id)
+        +markTutorialCompleted(lessonId)
+        +getCompletedTutorials()
+    }
+
+    StockfishService --> EvalBar : centipešaci / mat
+    StockfishService --> WizardChessEngine : potez AI bota i highlight
+    GeminiService --> VoiceService : okida odgovarajući MP3
+    OnlineChessImportService --> LichessExplorerService : Masters 404 fallback
+    OnlineChessImportService --> PgnService : preuzeti PGN tekst
+    LichessExplorerService --> AcademyCatalogs : master statistika i partije
+    PgnService --> AcademyCatalogs : konverzija u 3D lekciju
+    AcademyCatalogs --> AcademyProgression : evidencija napretka
+```
+
+### 2.6. Modul: Deljena šahovska logika (`src/shared/chessRules.ts`)
+
+Čist TypeScript modul bez spoljnih zavisnosti koji obezbeđuje deterministička pravila za online server, kao i Stockfish ELO profile i ocenu kvaliteta poteza.
+
+```mermaid
+classDiagram
+    direction TB
+
+    class ChessRules {
+        +createInitialChessState() ChessRulesState
+        +getLegalMovesForSquare(state, r, c) LegalMoveTarget[]
+        +applyChessMove(state, fromR, fromC, toR, toC, promo) ApplyMoveResult
+        +isKingInCheck(board, color) boolean
+        +serializeBoard(board) BoardCell[][]
+        +getStockfishEloProfile(personaId, difficulty) StockfishEloProfile
+        +classifyPlayerMoveQuality(prevEval, nextEval, color) QualityResult
+        +evalToDisplay(evalState) EvalDisplay
+    }
+
+    class ChessRulesState {
+        +BoardCell[][] board
+        +PieceColor currentTurn
+        +SquareCoord enPassantTarget
+        +number halfMoveClock
+        +string[] positionHistory
+        +boolean inCheck
+        +boolean isCheckmate
+        +DrawReason drawReason
+        +boolean gameOver
+    }
+
+    class ApplyMoveResult {
+        +boolean ok
+        +ChessRulesState state
+        +AppliedMove move
+        +string error
+    }
+
+    class StockfishEloProfile {
+        +number uciElo
+        +number movetimeMs
+        +string label
+    }
+
+    ChessRules --> ChessRulesState : kreira i transformiše
+    ChessRules --> ApplyMoveResult : vraća ishod poteza
+    ChessRules --> StockfishEloProfile : mapira ličnost + težinu
+```
+
+### 2.7. Modul: Backend Server i Multiplayer tok (`server.ts`)
+
+Prikazuje stvarnu razmenu WebSocket poruka na `/ws` za kreiranje sobe, priključenje, autoritativne satove, validaciju poteza i evidenciju ishoda u SQLite bazi.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Beli as Igrač 1 (Kreator)
+    participant Server as server.ts (HTTP + /ws)
+    participant Rules as chessRules.ts
+    participant Store as authStore.ts (SQLite)
+    actor Crni as Igrač 2 (Gost)
+
+    Beli->>Server: WS Connect /ws
+    Beli->>Server: { type: "room:create", timeControlId, preferredSide, authToken }
+    Server->>Store: getSessionUser(authToken)
+    Server-->>Beli: { type: "room:joined", roomId, yourColor: "w", playerToken, state }
+
+    Crni->>Server: WS Connect /ws
+    Crni->>Server: { type: "room:join", roomId, authToken }
+    Server-->>Crni: { type: "room:joined", roomId, yourColor: "b", playerToken, state }
+    Server-->>Beli: { type: "room:state", state (status: "playing") }
+    Server-->>Crni: { type: "room:state", state (status: "playing") }
+
+    Beli->>Server: { type: "move:submit", fromR: 6, fromC: 4, toR: 4, toC: 4 }
+    Server->>Rules: applyChessMove(room.chess, 6, 4, 4, 4)
+    Rules-->>Server: { ok: true, state, move }
+    Server-->>Beli: { type: "move:applied", move, state }
+    Server-->>Crni: { type: "move:applied", move, state }
+
+    Note over Beli,Crni: Partija se završava matom, remijem, predajom ili istekom sata
+    Server->>Store: recordMatch(userId, result)
+    Server-->>Beli: { type: "match:ended", outcome, state }
+    Server-->>Crni: { type: "match:ended", outcome, state }
+```
+
+---
+
+## 3. Ulazna tačka i životni ciklus
+
+1. [server.ts](./server.ts) pokreće Express aplikaciju (sa Vite dev middleware-om u razvoju ili `dist/` fajlovima u produkciji), inicijalizuje SQLite `authStore` i vezuje WebSocket server na `/ws`.
+2. [index.html](./index.html) učitava [src/main.tsx](./src/main.tsx), koji montira `<App />` unutar `React.StrictMode` i uvozi stilove iz [src/styles.css](./src/styles.css).
+3. [src/App.tsx](./src/App.tsx) renderuje HUD (3 kapsule: `Režimi`, `Partija`, `Podešavanja`), AI oblačić, `EvalBar`, modale i jednom poziva `initWizardChess()`, primenjujući sačuvana podešavanja (`wizard_chess_piece_set`, `wizard_chess_ai_difficulty`, `wizard_chess_ambience`, `wizard_chess_guided_mode`).
+4. [src/wizardChessEngine.js](./src/wizardChessEngine.js) pravi WebGL renderer u `#canvas-container`, učitava katedralu i osnovni `wizard` set (plus eventualno zapamćeni dodatni GLB set), postavlja izabrani 3D ambijent i izlaže `window.wizardChess` API.
+
+---
+
+## 4. Mapa fajlova i modula
+
+### Backend i deljena logika
 
 | Fajl | Odgovornost |
 | --- | --- |
-| [src/main.tsx](./src/main.tsx) | React ulazna tačka; kreira root i uvozi `src/styles.css`. |
-| [src/App.tsx](./src/App.tsx) | Glavni React ekran, inicijalizacija engine-a, izbor/pamćenje seta figura i AI lika, događaji poteza/resetovanja, hint, undo, mobilni panel i kompozicija HUD-a. |
-| [src/styles.css](./src/styles.css) | Stilovi aplikacije, HUD-a, AI panela, modala, mobilnog interfejsa i prikaza nad Three.js canvas-om. |
-| [src/components/PersonaSelector.tsx](./src/components/PersonaSelector.tsx) | Prikazuje ličnosti iz `PERSONAS` i poziva `onSelectPersona(id)`. |
-| [src/components/AIBubble.tsx](./src/components/AIBubble.tsx) | Prikazuje ime/ličnost, poruku, stanje učitavanja, glas, dugme za hint, Gemini podešavanje i minimizaciju panela. |
-| [src/components/ApiKeyModal.tsx](./src/components/ApiKeyModal.tsx) | Unos, čuvanje i brisanje Gemini API ključa preko `geminiService`. |
-| [src/components/PlayerLevelBar.tsx](./src/components/PlayerLevelBar.tsx) | Prikazuje nivo, titulu, XP napredak, niz uzastopnih uzimanja i poslednju XP nagradu. |
-| [src/components/Academy.tsx](./src/components/Academy.tsx) | Prikazuje četiri oblasti, navigaciju kroz lekcije, pitanja sa odgovorima i povratnom informacijom, napredak i mat-zagonetke. |
-| [src/components/Classic2DBoard.tsx](./src/components/Classic2DBoard.tsx) | Klasični 2D Staunton prikaz šahovske table sinhronizovan sa engine-om, sa trenutnim izvršavanjem poteza, okretanjem table i jasnim statusom šaha/mata/remija. |
+| [server.ts](./server.ts) | Express HTTP server, Vite middleware / statički `dist/`, `/api/auth/*` i `/api/profile/*` rute, `/api/gemini/*` proxy (`gemini-3.1-flash-lite`) i WebSocket (`/ws`) server za online duele sa autoritativnim satovima. |
+| [src/server/authStore.ts](./src/server/authStore.ts) | Perzistencija korisnika, sesija, spoja gostujućeg napretka i istorije partija u SQLite bazi (`node:sqlite`, `scrypt` heširanje lozinki). |
+| [src/shared/chessRules.ts](./src/shared/chessRules.ts) | Autoritativna deljena šahovska pravila za server i klijent, Stockfish ELO profili (`getStockfishEloProfile`), normalizacija evaluacije (`evalToDisplay`), klasifikacija kvaliteta poteza (`classifyPlayerMoveQuality`) i orijentacija 2D table. |
+| [src/shared/multiplayerTypes.ts](./src/shared/multiplayerTypes.ts) | Tipovi WebSocket poruka (`ClientWsMessage`, `ServerWsMessage`), stanje sobe i vremenske kontrole (`3+2`, `5+0`, `10+0`, `15+10`). |
+| [src/shared/authTypes.ts](./src/shared/authTypes.ts) | Tipovi za korisničke profile, oblak/lokalni napredak i evidenciju završenih partija. |
+
+### Frontend komponente
+
+| Fajl | Odgovornost |
+| --- | --- |
+| [src/App.tsx](./src/App.tsx) | Glavni orkestrator: HUD sa 3 kapsule (`Režimi`, `Partija`, `Podešavanja`), Stockfish evaluacija i detekcija blundera, ručni `💡 Savet` i automatski **Vođeni režim (`🧭 Vođeni`)**, PGN izvoz, Akademija i online sesija. |
+| [src/components/AIBubble.tsx](./src/components/AIBubble.tsx) | AI oblačić sa tekstualnim komentarima, kontrolom glasa (`🌿 Zen` u Park režimu) i dugmetom `💡 Savet` (prikazuje status Vođenog režima kada je uključen iz donjeg menija). |
+| [src/components/EvalBar.tsx](./src/components/EvalBar.tsx) | Vertikalna Stockfish traka prednosti za 3D HUD (`hud`) i 2D tablu (`board2d`), sa prikazom centipešaka/mata. |
+| [src/components/Classic2DBoard.tsx](./src/components/Classic2DBoard.tsx) | Klasični 2D Staunton modal sinhronizovan sa engine-om, sa `EvalBar` trakom, okretanjem table, `💡 Savet` i `🧭 Vođeni` dugmićima i trenutnim potezima. |
 | [src/components/Chess2DPiece.tsx](./src/components/Chess2DPiece.tsx) | Vektorski (SVG) prikaz šest šahovskih figura za 2D tablu i modal promocije pešaka. |
+| [src/components/Academy.tsx](./src/components/Academy.tsx) | Šahovska akademija: zagonetke, kviz lekcije, **3D Tutorijal** (30 kuriranih + uvezene PGN partije), Lichess Masters statistika i 3-tab uvoznik (Lichess Masters, Lichess/Chess.com, Fajl/Tekst). |
+| [src/components/OnlineDuelModal.tsx](./src/components/OnlineDuelModal.tsx) | Kreiranje i pridruživanje online duel sobi putem 6-karakternog koda ili pozivnog linka. |
+| [src/components/OnlineMatchBar.tsx](./src/components/OnlineMatchBar.tsx) | Prikaz satova, protivnika, ponude remija, predaje i zahteva za revanš tokom online partije. |
+| [src/components/AccountModal.tsx](./src/components/AccountModal.tsx) | Prijava, registracija, promena imena, pregled statistike i istorije partija. |
+| [src/components/PersonaSelector.tsx](./src/components/PersonaSelector.tsx) | Izbor AI ličnosti (`mentor`, `roast`, `rival`) za desktop i mobilni meni. |
+| [src/components/PlayerLevelBar.tsx](./src/components/PlayerLevelBar.tsx) | Prikaz RPG nivoa, titule, XP napretka i niza uzimanja. |
 
-### Logika igre i servisi
+### Engine, 3D okruženja i servisi
 
 | Fajl | Odgovornost |
 | --- | --- |
-| [src/wizardChessEngine.js](./src/wizardChessEngine.js) | Centralni Three.js i šahovski engine. Sadrži scenu, GLB i proceduralne figure, pravila, stanje partije, animacije, lokalni AI, kontrole kamere, HUD događaje i API za automatizaciju. |
-| [src/services/geminiService.ts](./src/services/geminiService.ts) | Tipovi i definicije ličnosti; Gemini generisanje reakcija, reakcija na undo i hintova; lokalni fallback odgovori. |
-| [src/services/sceneThemes.ts](./src/services/sceneThemes.ts) | Tipizirane postavke pozadine, magle, svetala i tona kamenih materijala za teme `mentor`, `roast` i `rival`. |
-| [src/services/progressionService.ts](./src/services/progressionService.ts) | XP, nivoi, titule, nizovi i statistika igrača; čuvanje u `localStorage`; obaveštavanje React pretplatnika. |
-| [src/services/voiceService.ts](./src/services/voiceService.ts) | Uključivanje/isključivanje govora, normalizacija teksta, povezivanje gotovih poruka sa MP3 fajlovima i puštanje zvuka. |
-| [src/services/soundService.ts](./src/services/soundService.ts) | Proceduralni Web Audio zvučni efekti za pomeranje, uzimanje figura, šah, mat i undo. |
-| [src/services/puzzleCatalog.ts](./src/services/puzzleCatalog.ts) | Tipizirani podaci 12 lokalnih mat-zagonetki: pozicija, provereni mat-potez, strana na potezu, tri nagoveštaja i objašnjenje. |
-| [src/services/academyCatalog.ts](./src/services/academyCatalog.ts) | Kurirani edukativni kvizovi: 12 poznatih partija, 12 otvaranja i 12 strategijskih lekcija, svaka sa objašnjenjem odgovora. |
-| [src/services/academyProgression.ts](./src/services/academyProgression.ts) | Čuva jedinstvene završene lekcije i zagonetke u `localStorage`; ponovljena aktivnost ne povećava progres. |
+| [src/wizardChessEngine.js](./src/wizardChessEngine.js) | Centralni Three.js i šahovski engine: GLB/proceduralni setovi figura, katedrala i Park (Zen) scena, pravila, animacije, lokalni AI fallback, `showHintHighlight` / `getHintHighlight` / `getFallbackBestMove`, Akademija / 3D Tutorijal i `window.wizardChess` API. |
+| [src/three/environments/outdoorParkEnv.ts](./src/three/environments/outdoorParkEnv.ts) | Proceduralno dnevno okruženje **Sunčani Park (Zen režim)**: popločani trg, ugrađena kamena tabla visokog kontrasta, drveće sa senkama i suncobrani. |
+| [src/services/sceneThemes.ts](./src/services/sceneThemes.ts) | Palete svetla, magle i kamenih materijala za `mentor`, `roast` i `rival` teme u katedrali. |
+| [src/services/sceneEnvironments.ts](./src/services/sceneEnvironments.ts) | Proceduralni 3D dekorativni elementi za tri teme katedrale. |
+| [src/services/opponentHolograms.ts](./src/services/opponentHolograms.ts) | 3D hologramski avatari protivnika u katedrali (automatski skriveni u Park/Zen režimu i 2D prikazu). |
+| [src/services/stockfishService.ts](./src/services/stockfishService.ts) | Web Worker red za `/stockfish/stockfish-19-lite-single.js` (`evaluatePosition`, `getHintMove`, `chooseBotMove`), otporan na `StrictMode` remount i prekide. |
+| [src/services/geminiService.ts](./src/services/geminiService.ts) | Pozivi ka `/api/gemini/*` za karakterne reakcije, undo komentare i objašnjenja saveta uz bogate lokalne fallback odgovore. |
+| [src/services/pgnService.ts](./src/services/pgnService.ts) | Parsiranje PGN zapisa (`chess.js`) u 3D Tutorijal lekcije, uklanjanje `[%clk]`/`[%eval]` tagova, rekonstrukcija FEN-a po koracima, lokalno čuvanje i izvoz partija u PGN. |
+| [src/services/lichessExplorerService.ts](./src/services/lichessExplorerService.ts) | Upiti ka `explorer.lichess.ovh/masters` sa keširanjem, računanjem W/D/L procenata, listom `topGames`, preuzimanjem master PGN partija i 60s zaštitom na HTTP `429`. |
+| [src/services/onlineChessImportService.ts](./src/services/onlineChessImportService.ts) | Parsiranje Lichess URL-ova (partije, studije, poglavlja uz fallback na Masters PGN), preuzimanje Lichess NDJSON partija igrača i Chess.com mesečnih arhiva. |
+| [src/data/chessAcademyLessons.ts](./src/data/chessAcademyLessons.ts) | 30 kuriranih lekcija za 3D Tutorijal (*Otvaranja*, *Odbrana*, *Poznate partije*). |
+| [src/services/academyCatalog.ts](./src/services/academyCatalog.ts) | Po 12 kviz-lekcija u oblastima *Poznate partije*, *Otvaranja* i *Strategija*. |
+| [src/services/puzzleCatalog.ts](./src/services/puzzleCatalog.ts) | 12 proverenih mat-u-jednom zagonetki sa pozicijama i po 3 nagoveštaja. |
+| [src/services/academyProgression.ts](./src/services/academyProgression.ts) | Čuvanje završenih zagonetki, kvizova i 3D tutorijala u `localStorage` i sinhronizacija sa nalogom. |
+| [src/services/progressionService.ts](./src/services/progressionService.ts) | RPG XP, nivoi, titule i statistika igrača (`localStorage` + sinhronizacija sa serverom). |
+| [src/services/authService.ts](./src/services/authService.ts) | Klijentski auth servis sa Bearer sesijama, automatskom sinhronizacijom napretka i evidencijom partija. |
+| [src/services/multiplayerService.ts](./src/services/multiplayerService.ts) | WebSocket klijent za online sobe, rekonekciju, poteze i satove. |
+| [src/services/voiceService.ts](./src/services/voiceService.ts) | Reprodukcija MP3 komentara iz `public/assets/audio/voices/`, utišavanje u Park/Zen režimu. |
+| [src/services/soundService.ts](./src/services/soundService.ts) | Web Audio API zvučni efekti (potez, uzimanje figure, šah, mat, undo, blunder upozorenje). |
 
-### Konfiguracija, testovi i sredstva
+---
 
-| Putanja | Odgovornost |
-| --- | --- |
-| [package.json](./package.json) | Zavisnosti i npm skripte za razvoj, build, type-check i testove. |
-| [vite.config.ts](./vite.config.ts) | React Vite plugin, port 3000, alias `@` i prosleđivanje env vrednosti za Gemini. |
-| [tsconfig.json](./tsconfig.json) | TypeScript podešavanja; uključuje `src` i `vite.config.ts`, dozvoljava JS i ne emituje fajlove. |
-| [metadata.json](./metadata.json) | Metapodaci AI Studio appleta. |
-| [test/applet.test.mjs](./test/applet.test.mjs) | Proverava HUD elemente, strukturu kataloga Akademije i validnost sedam kompresovanih GLB modela. |
-| [public/assets/glb/](./public/assets/glb/) | Katedrala i beli modeli šest vrsta šahovskih figura, kao `.glb.gz.b64`. |
-| [public/assets/audio/voices/](./public/assets/audio/voices/) | MP3 govorni komentari organizovani po ličnosti (`mentor`, `roast`, `rival`). |
-| [scripts/generate_voices.py](./scripts/generate_voices.py) | Pomoćna skripta za generisanje unapred definisanih audio fraza preko `edge_tts`. |
+## 5. Tokovi podataka i režimi rada
 
-## 4. React sloj i tok korisničkih događaja
+### Single-player, Stockfish analiza i Vođeni režim
 
-`App` čuva React UI stanje:
+1. **Inicijalizacija i red čekanja:** `stockfishService.init()` pokreće `/stockfish/stockfish-19-lite-single.js` u Web Worker-u kroz sekvencijalni FIFO red sa epohom za bezbedno otkazivanje (`cancelPending`).
+2. **Evaluacija i detekcija blundera:** Na svaki `wizardchess:move` u single-player režimu (van Akademije), `App.tsx` evaluira novu FEN poziciju, osvežava `EvalBar` i poredi evaluaciju pre/posle poteza igrača putem `classifyPlayerMoveQuality(...)`. Veliki pad prednosti označava potez kao `blunder` i aktivira reakciju i zvučni signal.
+3. **Ručni savet (`💡 Savet`) i Vođeni režim (`🧭 Vođeni`):**
+   - Zajednička rutina `runMoveHint` koristi `stockfishService.getHintMove(...)` (ili `window.wizardChess.getFallbackBestMove()` kada WASM nije dostupan) da pronađe najbolji potez, odmah ga označava na tabli preko `showHintHighlight(fromR, fromC, toR, toC)` (što ažurira 3D prstenove i `wizardchess:hint` događaj za `Classic2DBoard`) i traži kratko objašnjenje preko `geminiService.getHint(...)`.
+   - **Vođeni režim (`guidedMode`)** uključuje se u donjoj kapsuli *Režimi* (`#btn-guided-mode`) pored dugmeta za Katedralu/Park, kao i u 2D tabli (`#btn-2d-guided`), a izbor se pamti u `localStorage` (`wizard_chess_guided_mode`).
+   - Kada je Vođeni režim uključen, preporuka se automatski prikazuje čim je igrač na potezu (odmah po uključivanju, po završetku AI poteza, na startu nove partije kao beli, nakon `⏳ Vrati`, po izlasku iz Akademije i posle *Igraj odavde*). Automatske preporuke ne dodeljuju XP za savet, a isključivanjem režima se postojeće oznake odmah uklanjaju (`clearHintHighlight()`).
 
-- `selectedPersona` — izabrani AI lik (podrazumevano `mentor`).
-- `aiMessage` i `isLoadingAI` — tekst u AI panelu i indikator generisanja.
-- `isApiKeyModalOpen` — vidljivost API modalnog prozora.
-- `mobileSheetOpen` — prikaz mobilnih kontrola.
-- `academyVisible`, `academyView` i `academyPuzzleId` — prikaz Akademije i aktivnog zadatka.
-- `academyFeedback`, `academyHintCount` i `academyError` — pokušaj, postupni nagoveštaji i greške učitavanja zagonetke.
+### 3D scena, ambijenti i Akademija
 
-`handleSelectPersona` menja lik, početnu poruku i temu scene preko `window.wizardChess.setSceneTheme(id)`. `PersonaSelector` koristi se i u desktop i u mobilnom HUD-u. Na početku partije engine primenjuje trenutno izabranu temu nakon inicijalizacije.
+- **Ambijenti (`setAmbienceMode('cathedral' | 'park')`):** U `park` režimu učitava se proceduralni trg iz `outdoorParkEnv.ts` sa kamenom tablom u ravni pločnika, dok su 3D hologram protivnika i glasovni komentari skriveni/utišani (`voiceService.setAmbienceMuted(true)`). Promena ambijenta i seta figura ne resetuje partiju.
+- **Setovi figura (`setPieceSet(...)`):** Podržani su `wizard`, `ancient`, `dragon`, `medieval`, `vitez`, `srpski` i `klasicni`. Dodatni GLB setovi (`vitez`, `srpski`, `klasicni`) dekompresuju se iz `public/assets/glb/` tek pri prvom izboru.
+- **Akademija i 3D Tutorijal:** Ulazak u zagonetku ili 3D tutorijal snima stanje tekuće single-player partije. Korisnik može da uvozi partije iz Lichess Masters baze, Lichess/Chess.com linkova i profila ili lokalnih `.pgn` fajlova i da nastavi bilo koju poziciju protiv AI-ja pomoću `takeOverAcademyGame(...)`.
 
-Kada engine završi potez, emituje `wizardchess:move` sa bojom i vrstom figure, početnim i ciljnim poljem, informacijom o uzimanju, šahu, kraju partije i brojem poteza. `App` zatim:
+### Onlajn 1-na-1 dueli i korisnički nalozi
 
-1. dodeljuje XP preko `progressionService.awardMove(...)`;
-2. traži komentar od `geminiService.getReaction(...)`;
-3. ažurira poruku i stanje učitavanja AI panela.
+- Tokom online sobe (`gameMode === 'online'`), svaka provera legalnosti poteza, vremenske kontrole (`3+2`, `5+0`, `10+0`, `15+10`), ponude remija, predaje i revanša sa zamenom boja izvršava se na serveru u `server.ts` pomoću `src/shared/chessRules.ts`. Klijentski Stockfish worker, `EvalBar`, AI saveti, Vođeni režim i Undo automatski se isključuju radi fer-pleja.
+- `src/server/authStore.ts` čuva naloge, sesije i istoriju single-player i online partija u SQLite bazi (`node:sqlite`).
 
-Potezi u Akademiji emituju odvojeni `wizardchess:academy-move` događaj. `App` koristi proveru matiranja iz engine-a za povratnu informaciju zadatka; ti potezi ne dodeljuju XP niti pokreću običan AI komentar. `enterAcademy(...)` sačuva serijalizovano stanje table, istoriju poteza, režim i stranu igrača; `exitAcademy()` vrati ih i ponovo zakaže AI potez kada je potrebno. Katalog trenutno sadrži 12 proverljivih mat-zagonetki.
-
-`wizardchess:reset` osvežava poruku komentatora za novu partiju. Hint iz `AIBubble` poziva `handleRequestHint`, koji uzima trenutni kontekst engine-a preko `window.wizardChess.getGameContext()` i poziva Gemini servis. Undo poziva `window.wizardChess.undoPlayerMove()` pa traži reakciju lika. Akademija nudi 12 proverljivih mat-zagonetki i po 12 samostalnih kviz-lekcija o poznatim partijama, otvaranjima i strategiji. Lekcije koriste lokalno zapisane odgovore i objašnjenja; uspešan odgovor ili mat evidentira se jednom u `academyProgression`. Nakon uspeha zagonetke `setAcademyPosition(...)` učitava sledeću poziciju bez ponovnog snimanja ili menjanja sačuvane partije. Povratak iz zagonetke vrati originalnu partiju, dok pregled kviz-lekcija ne menja stanje table.
-
-## 5. Three.js i šahovski engine
-
-### Scena i sredstva
-
-`initWizardChess()` u [src/wizardChessEngine.js](./src/wizardChessEngine.js) pravi `WebGLRenderer`, `Scene`, kameru i `OrbitControls`, dodaje svetla i postavlja PMREM okruženje. `setSceneTheme(themeId)` podešava boju pozadine i magle, glavna svetla, svetla mangala i blagi tint registrovanih kamenih materijala; prikazuje dekorativnu grupu izabrane teme i ostavlja katedralni model vidljivim. Pri nepoznatom ključu beleži upozorenje i vraća izgled na podrazumevanu Alistair temu. Promena scene ne poziva reset partije. `loadAllAssets()` učitava:
-
-- `option8_cathedral` kao detaljnu osnovu svih scena;
-- modele `pawn`, `rook`, `knight`, `bishop`, `queen` i `king`;
-- teksture, materijale i animacije koje dolaze uz te modele.
-
-Modele engine traži prvo kao gzip-kompresovani Base64 GLB iz `./assets/glb/`, pa pokušava običan `.glb` fajl kao rezervu. Pri početnom učitavanju dekompresuju se samo katedrala i podrazumevani `wizard` set (plus eventualno zapamćeni detaljni GLB set iz `localStorage`), dok se ostali detaljni GLB setovi (`vitez`, `srpski`, `klasicni`) učitavaju lenjo (*lazy-load*) tek kada ih igrač prvi put izabere.
-
-`setPieceSet('wizard' | 'ancient' | 'dragon' | 'medieval' | 'vitez' | 'srpski' | 'klasicni')` menja prikaz svih figura uživo bez menjanja polja, poteza ili istorije partije. Podržano je sedam setova: rigovani `wizard` GLB set, tri proceduralna seta (`ancient`, `dragon`, `medieval`) čija se geometrija oslobađa pri promeni seta, i tri detaljna dvobojna GLB seta (`vitez`, `srpski`, `klasicni`). React čuva korisnikov izbor u `localStorage`.
-
-Dok je otvoren 2D modal (`set2DModeActive(true)`), potezi igrača i AI-ja izvršavaju se trenutno bez čekanja 3D animacije, a 3D render petlja miruje dok se korisnik ne vrati u 3D katedralu.
-
-`src/services/sceneThemes.ts` definiše identifikatore i palete, a `src/services/sceneEnvironments.ts` gradi tri grupe dekorativne geometrije: Alistairove armilarne sfere koje se polako okreću, Grixove zupčanike i nisko lebdeće varnice, odnosno Valeriusove heraldske zastave koje se blago njišu. `stepScene()` u `src/wizardChessEngine.js` ažurira samo trenutno vidljivu grupu; izbor teme ne dodaje nove objekte pri svakom izboru. Dekoracije ostaju van table i dopunjuju postojeću katedralu — nisu zamena za tri kompletna, zasebna okruženja.
-
-### Stanje i pravila šaha
-
-Stanje partije čuvaju promenljive unutar `initWizardChess()` — uključujući `boardState`, `currentTurn`, `playerColor`, `gameOver`, `moveHistory`, selekciju figure, validne poteze i stanje animacije. Zbog toga je trenutna arhitektura zatvorena u jednoj funkciji i nije izdvojena u poseban chess-model modul.
-
-Glavne funkcije pravila i poteza:
-
-- `getPseudoMovesForPiece(...)` — računa geometrijski moguće poteze figure, uključujući *en passant*.
-- `isKingInCheck(...)` — proverava da li je kralj napadnut.
-- `getLegalMovesForPiece(...)` i `getAllLegalMoves(...)` — filtriraju poteze zbog šaha i dodaju malu i veliku rokadu (`O-O`, `O-O-O`).
-- `executeChessMove(...)` — ažurira stanje table (uključujući promociju u kraljicu/topa/lovca/skakača, *en passant*, pravilo 50 poteza i trostruko ponavljanje pozicije), animira potez u 3D ili ga izvršava trenutno u 2D režimu, proverava završetak i emituje događaj poteza.
-- `resetChessBoard(...)`, `captureBoardSnapshot()` i `restoreBoardSnapshot(...)` — početak partije i čuvanje/obnavljanje kompletnog stanja.
-- `undoPlayerMove()` — vraća poslednji potez, odnosno poteze igrača i AI-ja u single-player režimu.
-
-Pravila šaha su implementirana u projektu; `package.json` ne sadrži `chess.js` zavisnost.
-
-### AI protivnik
-
-`chooseSmartAIMove(color)` podržava tri nivoa težine (`easy`, `medium`, `hard`): heuristički izbor poteza na lakom nivou, proveru protivničkih odgovora na srednjem nivou i 3-ply pretragu sa *alpha-beta* odsecanjem na teškom nivou. `maybeScheduleAIMove()` zakazuje odgovor protivnika, a `triggerAIMoveNow()` pokreće potez odmah.
-
-**Važna razlika:** ovaj engine bira poteze za protivnika. Gemini servis generiše tekstualne komentare i savete; ne bira poteze i nije izvor pravila šaha.
-
-### Animacije i kontrole
-
-Engine sadrži i logiku za:
-
-- animirano pomeranje figura i sekvence uzimanja;
-- pulsirajuću zlatnu runu ispod izabrane figure, sinhronizovanu sa oznakama legalnih poteza i ažuriranu u `stepScene(...)`;
-- kamere `player`, `top`, `side` i `wide`, kao i glatke prelaze;
-- kontrole mišem/dodirom i kretanje kamere tastaturom;
-- završni prikaz šah-mata i efekte razbijanja kamene figure;
-- režim Akademije koji postavlja zagonetku bez slanja poteza u običan XP/AI komentar tok i vraća sačuvano logičko stanje partije pri izlasku;
-- render loop kroz `animate()` i `stepScene(...)`.
+---
 
 ## 6. Granica između React-a i engine-a
 
-Trenutno postoje tri mehanizma komunikacije:
+1. **DOM selektori** za dugmad kontrole partije (`btn-reset`, `btn-ai-move`, `btn-side-toggle`, `btn-hide-ui`).
+2. **`CustomEvent` događaji** (`wizardchess:move`, `wizardchess:reset`, `wizardchess:undo`, `wizardchess:hint`, `wizardchess:academy-move`, `wizardchess:online-move-submit`, `wizardchess:cameraview`, `wizardchess:pieceset-loading`, `wizardchess:promotion-request`).
+3. **`window.wizardChess` API** (`executeChessMove`, `undoPlayerMove`, `showHintHighlight`, `clearHintHighlight`, `getHintHighlight`, `getFallbackBestMove`, `setPieceSet`, `setAIDifficulty`, `setAmbienceMode`, `set2DModeActive`, `enterAcademyTutorial`, `takeOverAcademyGame`, `getMoveHistory`, `getGameContext` i online sinhronizaciju).
 
-1. **DOM i ID-jevi:** engine pronalazi React-om prikazane kontrole (`btn-reset`, `btn-ai-move`, `btn-cam-*` itd.) i direktno im dodaje click handlere. React dugmad mogu imati sopstvene handlere, na primer za zatvaranje mobilnog menija.
-2. **CustomEvent:** engine šalje `wizardchess:move` i `wizardchess:reset`; `App` ih sluša i poziva servise.
-3. **`window.wizardChess`:** engine izlaže funkcije kao `undoPlayerMove`, `triggerAIMoveNow`, `resetChessBoard`, `setCameraPreset` i `getGameContext`. React ga koristi za undo, hint i vraćanje UI-ja; testovi i automatizacija koriste širi API.
+---
 
-Ova integracija trenutno radi, ali oslanja se na dogovorene DOM ID-jeve i globalni objekat, a ne na tipizovan React context ili zaseban engine adapter.
+## 7. Konfiguracija, pokretanje i testovi
 
-## 7. AI, glas i napredovanje
-
-### Gemini i offline odgovori
-
-U [src/services/geminiService.ts](./src/services/geminiService.ts):
-
-- `PersonaId`, `Persona` i `PERSONAS` definišu tri lika i njihove promptove.
-- `MoveEventDetail` je oblik događaja koji opisuje potez.
-- `getReaction(...)` komentariše potez, `getUndoReaction(...)` reaguje na vraćanje poteza, a `getHint(...)` daje savet.
-- Ako Gemini nije konfigurisan ili poziv ne uspe, servis bira lokalni odgovor iz `FALLBACK_REACTIONS` ili koristi offline hint.
-- API ključ se može podesiti preko `getApiKey()` / `setApiKey()`.
-
-`vite.config.ts` učitava `GEMINI_API_KEY` ili `VITE_GEMINI_API_KEY` i ugrađuje vrednost u klijentski bundle. Ključ koji se unosi kroz modal čuva se u `localStorage` pregledača. Ni jedan od ova dva pristupa ne skriva ključ od korisnika aplikacije; za produkcijski tajni ključ potreban je serverski posrednik.
-
-### Glas
-
-`AIBubble` prosleđuje tekst i ličnost servisu `voiceService`. Servis prvo traži odgovarajući unapred generisani MP3 u `public/assets/audio/voices/`, a za neprepoznat tekst bira frazu prema ključnim rečima. Uključenost glasa pamti se u `localStorage`.
-
-### XP i nivoi
-
-`progressionService` pamti XP, nivo, titulu, niz uzastopnih uzimanja i statistiku poteza u `localStorage`. `awardMove(...)` dodeljuje XP isključivo za poteze igrača (potez, uzimanje, šah, pobedu matom ili remi), dok `recordOpponentMove(...)` resetuje niz uzimanja kada AI uzme figuru ili matira igrača. `awardHint()` dodeljuje XP za savet. `PlayerLevelBar` prati servis preko `subscribe(...)`.
-
-## 8. Konfiguracija, pokretanje i provere
-
-Naredbe definisane u [package.json](./package.json):
-
-| Naredba | Svrha |
+| Komanda | Svrha |
 | --- | --- |
-| `npm run dev` | Vite razvojni server, port 3000. |
-| `npm run build` | Produkcijski build u `dist/`. |
-| `npm run preview` | Lokalni pregled produkcijskog build-a. |
-| `npm run lint` | `tsc --noEmit` provera tipova. |
-| `npm test` | Node testovi iz `test/applet.test.mjs`. |
-
-TypeScript konfiguracija uključuje i JavaScript fajlove, ali trenutno ne uključuje proveru tipova za JS (`checkJs` nije uključen). Zato su React i servisi uglavnom TypeScript, dok je centralni engine JavaScript.
-
-## 9. Trenutna arhitektonska ograničenja
-
-- `src/wizardChessEngine.js` je najveći centralni modul i sadrži više odgovornosti: prikaz, modelovanje scene, pravila, AI, animacije i kontrolere.
-- Šahovsko stanje ostaje privatno unutar `initWizardChess()`; druge celine pristupaju ograničenim funkcijama iz `window.wizardChess`.
-- React i engine dele DOM ID-jeve, pa promena markup-a može uticati na engine handlere.
-- Tematske dekoracije su proceduralni prototipi preko zajedničke katedrale; ne predstavljaju tri kompletna, zasebna okruženja.
-- Gemini pozivi idu iz klijentske aplikacije; ključ ugrađen preko env promenljive nije tajna.
-- Automatski testovi proveravaju HUD ugovor, pravila integracije, katalog Akademije i integritet 3D modela; vizuelno WebGL iscrtavanje proverava se u pregledaču.
-
-## 10. Funkcije relevantne za planiranje scena
-
-Za povezivanje scena sa ličnostima najvažnije tačke su:
-
-- `App.handleSelectPersona(id)` — menja React stanje, uvodnu poruku lika i temu scene.
-- `PersonaSelector` — poziva `onSelectPersona` za izabranog lika.
-- `initWizardChess()` — inicijalizuje scenu i čuva Three.js objekte unutar closure-a.
-- `loadAllAssets()` — učitava katedralu i figure na početku.
-- `setSceneTheme(themeId)` — primenjuje temu bez resetovanja partije.
-- `SCENE_THEMES` — tipizirana konfiguracija tema u `src/services/sceneThemes.ts`.
-- `createSceneEnvironments()` — izgradi dekorativne grupe tema u `src/services/sceneEnvironments.ts`.
-- `window.wizardChess` — postojeća granica za izlaganje engine funkcija van closure-a.
-
-Dalji razvoj zasebnih ambijenata treba da proširi kontrolisanu engine funkciju; React ne treba direktno da menja Three.js objekte. Pri promeni scene mora se sačuvati `boardState` i ostalo stanje partije.
+| `npm run dev` | Full-stack razvojni server (`tsx server.ts`), port 3000. |
+| `npm run build` | Vite produkcijski build u `dist/`. |
+| `npm start` | Produkcijski server (`node server.ts`). |
+| `npm run lint` | `tsc --noEmit` provera TypeScript tipova. |
+| `npm test` | Izvršava sve testove u `test/applet.test.mjs`. |

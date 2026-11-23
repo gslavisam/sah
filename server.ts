@@ -453,14 +453,27 @@ async function startServer() {
           thinkingConfig: {
             thinkingLevel: ThinkingLevel.MINIMAL,
           },
-          abortSignal: AbortSignal.timeout(3500),
+          abortSignal: AbortSignal.timeout(8000),
         },
       });
-      res.json({ text: response?.text?.trim() || null, configured: true });
+      if (!res.headersSent && !res.writableEnded) {
+        res.json({ text: response?.text?.trim() || null, configured: true });
+      }
     } catch (err: unknown) {
+      const errName =
+        err && typeof err === 'object' && 'name' in err ? String((err as { name?: unknown }).name) : '';
+      const isAbort = errName === 'AbortError' || errName === 'TimeoutError';
+      if (isAbort) {
+        if (!res.headersSent && !res.writableEnded) {
+          res.json({ text: null, configured: true, timedOut: true });
+        }
+        return;
+      }
       console.warn('Gemini server generateContent error:', err);
       const message = err instanceof Error ? err.message : 'Gemini request failed';
-      res.status(502).json({ text: null, configured: true, error: message });
+      if (!res.headersSent && !res.writableEnded) {
+        res.status(502).json({ text: null, configured: true, error: message });
+      }
     }
   });
 

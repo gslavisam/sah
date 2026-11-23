@@ -1066,6 +1066,7 @@ export function initWizardChess() {
     scene.add(squareHighlightsGroup);
     const hintHighlightsGroup = new THREE.Group();
     scene.add(hintHighlightsGroup);
+    let activeHintCoords = null;
     const selectedPieceAura = new THREE.Group();
     selectedPieceAura.name = 'selected-piece-aura';
     const selectionAuraMaterial = new THREE.MeshBasicMaterial({
@@ -3762,6 +3763,7 @@ export function initWizardChess() {
     }
 
     function clearHintHighlight(dispatchEvent = true) {
+      activeHintCoords = null;
       while (hintHighlightsGroup.children.length > 0) {
         const child = hintHighlightsGroup.children[0];
         hintHighlightsGroup.remove(child);
@@ -3775,6 +3777,7 @@ export function initWizardChess() {
 
     function showHintHighlight(fromR, fromC, toR, toC) {
       clearHintHighlight(false);
+      activeHintCoords = { fromR, fromC, toR, toC };
       const fromPos = boardToWorld(fromR, fromC);
       const toPos = boardToWorld(toR, toC);
 
@@ -3809,6 +3812,25 @@ export function initWizardChess() {
           })
         );
       }
+    }
+
+    function getFallbackBestMove() {
+      if (gameOver || academyMode || gameMode === 'online') return null;
+      const chosen = chooseHardAIMove(currentTurn);
+      if (!chosen) return null;
+      const fileChars = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+      const pieceType = boardState[chosen.fromR]?.[chosen.fromC]?.type || undefined;
+      const promotion = chosen.promotion || (pieceType === 'pawn' && (chosen.toR === 0 || chosen.toR === 7) ? 'queen' : undefined);
+      return {
+        fromR: chosen.fromR,
+        fromC: chosen.fromC,
+        toR: chosen.toR,
+        toC: chosen.toC,
+        fromSquare: `${fileChars[chosen.fromC]}${8 - chosen.fromR}`,
+        toSquare: `${fileChars[chosen.toC]}${8 - chosen.toR}`,
+        pieceType,
+        promotion,
+      };
     }
 
     function getFen() {
@@ -5959,6 +5981,8 @@ export function initWizardChess() {
       getMoveHistory,
       showHintHighlight,
       clearHintHighlight,
+      getHintHighlight: () => (activeHintCoords ? { ...activeHintCoords } : null),
+      getFallbackBestMove,
       getAIDifficulty: () => aiDifficulty,
       getGameContext: () => {
         const fileChars = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
