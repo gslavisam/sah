@@ -444,16 +444,24 @@ async function startServer() {
       return;
     }
 
+    const rawMaxTokens = Number(req.body?.maxOutputTokens);
+    const maxOutputTokens = Number.isFinite(rawMaxTokens)
+      ? Math.min(700, Math.max(80, Math.round(rawMaxTokens)))
+      : 120;
+    const jsonMode = req.body?.jsonMode === true;
+    const timeoutMs = maxOutputTokens > 200 ? 11000 : 8000;
+
     try {
       const response = await client.models.generateContent({
         model: 'gemini-3.1-flash-lite',
         contents: prompt,
         config: {
-          maxOutputTokens: 120,
+          maxOutputTokens,
+          ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
           thinkingConfig: {
             thinkingLevel: ThinkingLevel.MINIMAL,
           },
-          abortSignal: AbortSignal.timeout(8000),
+          abortSignal: AbortSignal.timeout(timeoutMs),
         },
       });
       if (!res.headersSent && !res.writableEnded) {

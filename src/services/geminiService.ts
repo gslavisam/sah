@@ -266,17 +266,25 @@ class GeminiService {
     }
   }
 
-  private async generateViaProxy(prompt: string): Promise<string | null> {
+  private async generateViaProxy(
+    prompt: string,
+    options?: { maxOutputTokens?: number; jsonMode?: boolean; timeoutMs?: number }
+  ): Promise<string | null> {
     if (this.serverConfigured === false) {
       return null;
     }
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8500);
+    const timeoutMs = options?.timeoutMs ?? 8500;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch('/api/gemini/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({
+          prompt,
+          ...(options?.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}),
+          ...(options?.jsonMode ? { jsonMode: true } : {}),
+        }),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -292,6 +300,18 @@ class GeminiService {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  public async generateGameOverviewJson(prompt: string): Promise<string | null> {
+    const configured = await this.checkServerStatus();
+    if (!configured) {
+      return null;
+    }
+    return this.generateViaProxy(prompt, {
+      maxOutputTokens: 580,
+      jsonMode: true,
+      timeoutMs: 11500,
+    });
   }
 
   public async getReaction(

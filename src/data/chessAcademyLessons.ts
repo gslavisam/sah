@@ -16,6 +16,31 @@ export interface AcademyStep {
   promotion?: PromotionPieceType;
 }
 
+export interface GameEducationalBrief {
+  title: string;
+  playersLine: string;
+  contextLine: string;
+  openingLine: string;
+  strategySummary: string;
+  keyMoments: string[];
+  source: 'gemini' | 'local';
+  generatedAt: number;
+}
+
+export interface GameOverviewMetadata {
+  white?: string;
+  black?: string;
+  whiteElo?: string;
+  blackElo?: string;
+  event?: string;
+  site?: string;
+  date?: string;
+  result?: string;
+  eco?: string;
+  opening?: string;
+  cachedBrief?: GameEducationalBrief;
+}
+
 export interface ChessAcademyLesson {
   id: string;
   category: AcademyCategory;
@@ -27,6 +52,7 @@ export interface ChessAcademyLesson {
   steps: AcademyStep[];
   isCustom?: boolean;
   createdAt?: number;
+  gameInfo?: GameOverviewMetadata;
 }
 
 export const ACADEMY_TUTORIAL_CATEGORIES: {

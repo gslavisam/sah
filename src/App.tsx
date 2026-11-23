@@ -24,7 +24,8 @@ import { academyProgression } from './services/academyProgression';
 import {
   CHESS_ACADEMY_LESSONS,
   type AcademyCategory,
-  type ChessAcademyLesson
+  type ChessAcademyLesson,
+  type GameEducationalBrief
 } from './data/chessAcademyLessons';
 import {
   downloadPgnFile,
@@ -32,6 +33,7 @@ import {
   loadCustomPgnLessons,
   parsePgnToLesson,
   persistCustomPgnLessons,
+  reconstructLessonFen,
   type GameExportSnapshot
 } from './services/pgnService';
 import {
@@ -134,6 +136,7 @@ export default function App() {
   tutorialStepIndexRef.current = tutorialStepIndex;
   const [tutorialAnimating, setTutorialAnimating] = useState(false);
   const [tutorialGameOver, setTutorialGameOver] = useState(false);
+  const [tutorialAutoPlay, setTutorialAutoPlay] = useState(false);
   const tutorialAnimTimerRef = useRef<number | null>(null);
   const [customLessons, setCustomLessons] = useState<ChessAcademyLesson[]>(() =>
     loadCustomPgnLessons()
@@ -942,6 +945,7 @@ export default function App() {
   };
 
   const handleOpenTutorial = (category?: AcademyCategory) => {
+    setTutorialAutoPlay(false);
     const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
     const targetLesson =
       (category ? allLessons.find((item) => item.category === category) : undefined) ||
@@ -972,6 +976,7 @@ export default function App() {
   };
 
   const handleSelectTutorialLesson = (lessonId: string, customOverride?: ChessAcademyLesson[]) => {
+    setTutorialAutoPlay(false);
     const allLessons = [...(customOverride ?? customLessonsRef.current), ...CHESS_ACADEMY_LESSONS];
     const targetLesson = allLessons.find((item) => item.id === lessonId);
     if (!targetLesson) return;
@@ -1015,6 +1020,7 @@ export default function App() {
     const ok = win.wizardChess?.executeTutorialMove?.(step.from, step.to, step.promotion);
     if (!ok) {
       setTutorialAnimating(false);
+      setTutorialAutoPlay(false);
       setAcademyError(`Potez ${step.moveNumber} nije mogao da se odigra na tabli.`);
       return;
     }
@@ -1027,7 +1033,108 @@ export default function App() {
     }, 4500);
   };
 
+  const handlePrevTutorialStep = () => {
+    if (tutorialAnimating) return;
+    setTutorialAutoPlay(false);
+    const prevIndex = tutorialStepIndexRef.current - 1;
+    if (prevIndex < 0) return;
+    const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
+    const lesson = allLessons.find((item) => item.id === tutorialLessonIdRef.current);
+    if (!lesson) return;
+    const prevFen = reconstructLessonFen(lesson, prevIndex);
+    const viewSide: 'w' | 'b' = lesson.category === 'Odbrana' ? 'b' : 'w';
+    const win = window as Window & {
+      wizardChess?: {
+        setAcademyFenPosition?: (
+          fen?: string,
+          options?: { viewSide?: 'w' | 'b'; immediateCamera?: boolean }
+        ) => boolean;
+      };
+    };
+    if (!win.wizardChess?.setAcademyFenPosition?.(prevFen, { viewSide, immediateCamera: true })) {
+      setAcademyError('Prethodni potez nije mogao da se prikaže na 3D tabli.');
+      return;
+    }
+    setTutorialStepIndex(prevIndex);
+    setTutorialGameOver(false);
+    setAcademyError(null);
+  };
+
+  const handleToggleTutorialAutoPlay = () => {
+    if (academyView !== 'tutorial') return;
+    const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
+    const lesson = allLessons.find((item) => item.id === tutorialLessonIdRef.current);
+    if (!lesson || tutorialStepIndexRef.current >= lesson.steps.length || tutorialGameOver) {
+      setTutorialAutoPlay(false);
+      return;
+    }
+    setTutorialAutoPlay((prev) => !prev);
+  };
+
+  const handleStartTutorialAutoPlay = () => {
+    if (academyView !== 'tutorial') return;
+    const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
+    const lesson = allLessons.find((item) => item.id === tutorialLessonIdRef.current);
+    if (!lesson || tutorialStepIndexRef.current >= lesson.steps.length || tutorialGameOver) {
+      return;
+    }
+    setTutorialAutoPlay(true);
+  };
+
+  const handleCacheLessonBrief = (lessonId: string, brief: GameEducationalBrief) => {
+    const existing = customLessonsRef.current.find((item) => item.id === lessonId);
+    if (!existing) return;
+    if (
+      existing.gameInfo?.cachedBrief?.source === brief.source &&
+      existing.gameInfo?.cachedBrief?.generatedAt === brief.generatedAt
+    ) {
+      return;
+    }
+    const updated = customLessonsRef.current.map((item) =>
+      item.id === lessonId
+        ? {
+            ...item,
+            gameInfo: {
+              ...item.gameInfo,
+              cachedBrief: brief,
+            },
+          }
+        : item
+    );
+    customLessonsRef.current = updated;
+    setCustomLessons(updated);
+    persistCustomPgnLessons(updated);
+  };
+
+  useEffect(() => {
+    if (!tutorialAutoPlay) return;
+    if (academyView !== 'tutorial' || tutorialGameOver) {
+      setTutorialAutoPlay(false);
+      return;
+    }
+    if (tutorialAnimating) return;
+    const allLessons = [...customLessonsRef.current, ...CHESS_ACADEMY_LESSONS];
+    const lesson = allLessons.find((item) => item.id === tutorialLessonId);
+    if (!lesson || tutorialStepIndex >= lesson.steps.length) {
+      setTutorialAutoPlay(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      handlePlayTutorialStep();
+    }, tutorialStepIndex === 0 ? 120 : 450);
+    return () => window.clearTimeout(timer);
+  }, [
+    tutorialAutoPlay,
+    academyView,
+    tutorialAnimating,
+    tutorialGameOver,
+    tutorialLessonId,
+    tutorialStepIndex,
+    customLessons,
+  ]);
+
   const handleResetTutorialLesson = () => {
+    setTutorialAutoPlay(false);
     handleSelectTutorialLesson(tutorialLessonIdRef.current);
   };
 
@@ -1059,6 +1166,7 @@ export default function App() {
       evalReqSeqRef.current += 1;
       stockfishService.cancelPending();
       setIsEvaluating(false);
+      setTutorialAutoPlay(false);
       setAcademyView('tutorial');
       setTutorialLessonId(newLesson.id);
       setTutorialStepIndex(0);
@@ -1105,6 +1213,7 @@ export default function App() {
       return;
     }
     setHasPlayedMoves(false);
+    setTutorialAutoPlay(false);
     setTutorialAnimating(false);
     setAcademyVisible(false);
     setAcademyView('home');
@@ -1159,6 +1268,7 @@ export default function App() {
       return;
     }
     restoreEvalFromEngine();
+    setTutorialAutoPlay(false);
     setAcademyView('home');
     setTutorialAnimating(false);
     setTutorialGameOver(false);
@@ -1180,6 +1290,7 @@ export default function App() {
       }
       restoreEvalFromEngine();
     }
+    setTutorialAutoPlay(false);
     setTutorialAnimating(false);
     setAcademyView('home');
     setAcademyVisible(false);
@@ -1873,6 +1984,7 @@ export default function App() {
           tutorialStepIndex={tutorialStepIndex}
           tutorialAnimating={tutorialAnimating}
           tutorialGameOver={tutorialGameOver}
+          tutorialAutoPlay={tutorialAutoPlay}
           customLessons={customLessons}
           error={academyError}
           onClose={handleCloseAcademy}
@@ -1885,11 +1997,15 @@ export default function App() {
           onOpenTutorial={handleOpenTutorial}
           onSelectTutorialLesson={(id) => handleSelectTutorialLesson(id)}
           onPlayTutorialStep={handlePlayTutorialStep}
+          onPrevTutorialStep={handlePrevTutorialStep}
+          onToggleTutorialAutoPlay={handleToggleTutorialAutoPlay}
+          onStartTutorialAutoPlay={handleStartTutorialAutoPlay}
           onResetTutorialLesson={handleResetTutorialLesson}
           onTakeOverTutorial={handleTakeOverTutorial}
           onLeaveTutorial={handleLeaveTutorial}
           onImportPgn={handleImportPgn}
           onDeleteCustomLesson={handleDeleteCustomLesson}
+          onCacheLessonBrief={handleCacheLessonBrief}
         />
       ) : null}
 

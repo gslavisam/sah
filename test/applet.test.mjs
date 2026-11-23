@@ -736,13 +736,23 @@ test('3D Mentor Tutorial wires engine FEN loading, animated steps, board lock, S
   const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
   const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
   const progressionSrc = fs.readFileSync(path.join(ROOT, 'src/services/academyProgression.ts'), 'utf-8');
+  const cssSrc = fs.readFileSync(path.join(ROOT, 'src/styles.css'), 'utf-8');
 
   assert.ok(academySrc.includes('Interaktivni 3D Tutorijal (30 lekcija)'));
+  assert.ok(academySrc.includes('id="academy-tutorial-controls"'));
+  assert.ok(academySrc.includes('id="btn-academy-minimize"'));
+  assert.ok(academySrc.includes('id="btn-tutorial-autoplay"'));
+  assert.ok(academySrc.includes('id="btn-tutorial-prev-step"'));
   assert.ok(academySrc.includes('id="btn-tutorial-takeover"'));
   assert.ok(academySrc.includes('Igraj odavde'));
   assert.ok(academySrc.includes('id="btn-tutorial-next-step"'));
   assert.ok(academySrc.includes('id="btn-tutorial-reset"'));
 
+  assert.ok(cssSrc.includes('.academy-tutorial-float'));
+  assert.ok(cssSrc.includes('.academy-panel.minimized'));
+
+  assert.ok(appTsx.includes('handlePrevTutorialStep'));
+  assert.ok(appTsx.includes('handleToggleTutorialAutoPlay'));
   assert.ok(appTsx.includes('enterAcademyTutorial'));
   assert.ok(appTsx.includes('executeTutorialMove'));
   assert.ok(appTsx.includes('takeOverAcademyGame'));
@@ -752,6 +762,8 @@ test('3D Mentor Tutorial wires engine FEN loading, animated steps, board lock, S
   assert.ok(engineSrc.includes('function setAcademyFenPosition('));
   assert.ok(engineSrc.includes('function executeTutorialMove('));
   assert.ok(engineSrc.includes('function takeOverAcademyGame('));
+  assert.ok(engineSrc.includes('skipCaptureDuel = Boolean(options.tutorialStep || academyTutorialMode)'));
+  assert.ok(engineSrc.includes('animateCaptureDuel = isCapture && !skipCaptureDuel'));
   assert.ok(engineSrc.includes('|| academyTutorialMode) return;'), '3D board clicks must be locked during tutorial playback');
   assert.ok(engineSrc.includes('tutorialStep: Boolean(options.tutorialStep)'));
 
@@ -1151,6 +1163,99 @@ test('Guided Mode (Vođeni režim) wires auto-recommendation triggers, localStor
   assert.ok(cssSrc.includes('#hud-dock .hud-btn.guided-active'));
   assert.ok(cssSrc.includes('.chess-2d-btn-guided.active'));
 });
+
+test('Game Brief service builds local overview, caches Gemini brief persistently without regenerating, and wires modal UI', async () => {
+  const { parsePgnToLesson } = await import('../src/services/pgnService.ts');
+  const {
+    buildLocalGameBrief,
+    getOrCreateGameBrief,
+    getAutoOpenBriefPreference,
+    setAutoOpenBriefPreference,
+    __resetGameBriefCacheForTests,
+  } = await import('../src/services/gameBriefService.ts');
+
+  __resetGameBriefCacheForTests();
+
+  const samplePgn = `[Event "Opera House"]
+[Site "Paris"]
+[Date "1858.11.02"]
+[White "Paul Morphy"]
+[Black "Duke Karl"]
+[WhiteElo "2690"]
+[BlackElo "2100"]
+[ECO "C41"]
+[Opening "Philidor Defense"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0`;
+
+  const lesson = parsePgnToLesson(samplePgn);
+  assert.equal(lesson.gameInfo?.white, 'Paul Morphy');
+  assert.equal(lesson.gameInfo?.black, 'Duke Karl');
+  assert.equal(lesson.gameInfo?.whiteElo, '2690');
+  assert.equal(lesson.gameInfo?.eco, 'C41');
+  assert.equal(lesson.gameInfo?.opening, 'Philidor Defense');
+
+  const localBrief = buildLocalGameBrief(lesson);
+  assert.equal(localBrief.source, 'local');
+  assert.ok(localBrief.playersLine.includes('Paul Morphy (2690)'));
+  assert.ok(localBrief.openingLine.includes('C41'));
+  assert.ok(localBrief.keyMoments.some((m) => m.includes('17. Rd8#')));
+
+  const storageMap = new Map();
+  const mockStorage = {
+    getItem: (k) => (storageMap.has(k) ? storageMap.get(k) : null),
+    setItem: (k, v) => storageMap.set(k, v),
+  };
+
+  let geminiCalls = 0;
+  const mockGenerate = async () => {
+    geminiCalls += 1;
+    return JSON.stringify({
+      contextLine: 'Čuvena partija iz Pariza 1858. godine u operskoj loži.',
+      openingLine: 'Filidorova odbrana (C41) — rani razvoj za brzu inicijativu.',
+      strategySummary: 'Morfi žrtvuje materijal za brzi razvoj i otvaranje linija ka kralju.',
+      keyMoments: ['10. Nxb5 — Žrtva skakača za otvaranje d-linije', '17. Rd8# — Odlučujući mat'],
+    });
+  };
+
+  const first = await getOrCreateGameBrief(lesson, {
+    storage: mockStorage,
+    checkGeminiConfigured: async () => true,
+    generateGeminiJson: mockGenerate,
+  });
+  assert.equal(first.fromCache, false);
+  assert.equal(first.brief.source, 'gemini');
+  assert.equal(geminiCalls, 1);
+
+  // Clear in-memory cache and re-import the same PGN — must hit persistent storage and never re-call Gemini
+  __resetGameBriefCacheForTests();
+  const reimportedLesson = parsePgnToLesson(samplePgn);
+  const second = await getOrCreateGameBrief(reimportedLesson, {
+    storage: mockStorage,
+    checkGeminiConfigured: async () => true,
+    generateGeminiJson: mockGenerate,
+  });
+  assert.equal(second.fromCache, true);
+  assert.equal(second.brief.source, 'gemini');
+  assert.equal(geminiCalls, 1, 'Cached brief must not trigger a second Gemini call');
+
+  assert.equal(getAutoOpenBriefPreference(mockStorage), true);
+  setAutoOpenBriefPreference(false, mockStorage);
+  assert.equal(getAutoOpenBriefPreference(mockStorage), false);
+
+  const academySrc = fs.readFileSync(path.join(ROOT, 'src/components/Academy.tsx'), 'utf-8');
+  const appTsx = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf-8');
+
+  assert.ok(academySrc.includes('id="academy-game-brief-modal"'));
+  assert.ok(academySrc.includes('id="btn-tutorial-brief"'));
+  assert.ok(academySrc.includes('id="btn-brief-play"'));
+  assert.ok(appTsx.includes('handleStartTutorialAutoPlay'));
+  assert.ok(appTsx.includes('handleCacheLessonBrief'));
+  assert.ok(serverSrc.includes('maxOutputTokens'));
+});
+
 
 
 

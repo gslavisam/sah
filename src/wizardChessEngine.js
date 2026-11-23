@@ -3990,6 +3990,8 @@ export function initWizardChess() {
       const epCapturedC = isEnPassant ? matchedLegal.capturedC : -1;
       const captured = isEnPassant ? boardState[epCapturedR]?.[epCapturedC] : targetOnDest;
       const isCapture = Boolean(captured);
+      const skipCaptureDuel = Boolean(options.tutorialStep || academyTutorialMode);
+      const animateCaptureDuel = isCapture && !skipCaptureDuel;
       const nextEnPassantTarget =
         piece.type === 'pawn' && Math.abs(toR - fromR) === 2
           ? {
@@ -4054,12 +4056,12 @@ export function initWizardChess() {
       }
 
       // Defending enemy statue turns to face the incoming attacker shield-to-shield
-      if (isCapture && captured && captured.mesh) {
+      if (animateCaptureDuel && captured && captured.mesh) {
         captured.mesh.rotation.y = Math.atan2(-dx, -dz);
       }
 
       // Full Concrete Standoff Distance for Melee Strike (0.36m for multi-square captures, scaled to 0.76*dist for 1-square captures so attacker always steps forward)
-      const stopOffset = isCapture ? Math.min(MELEE_STANDOFF, dist * 0.76) : 0;
+      const stopOffset = animateCaptureDuel ? Math.min(MELEE_STANDOFF, dist * 0.76) : 0;
       const strikePos = new THREE.Vector3(
         endPos.x - dirX * stopOffset,
         BOARD_SURFACE_Y,
@@ -4082,8 +4084,8 @@ export function initWizardChess() {
       }
 
       // Pre-analyze Knight path vs bystanders so Knights cleanly skirt single blockers or vault high over walls
-      const segDx = (isCapture ? strikePos.x : endPos.x) - startPos.x;
-      const segDz = (isCapture ? strikePos.z : endPos.z) - startPos.z;
+      const segDx = (animateCaptureDuel ? strikePos.x : endPos.x) - startPos.x;
+      const segDz = (animateCaptureDuel ? strikePos.z : endPos.z) - startPos.z;
       const segLen = Math.hypot(segDx, segDz) || 0.001;
       const segUx = segDx / segLen;
       const segUz = segDz / segLen;
@@ -4132,7 +4134,7 @@ export function initWizardChess() {
         piece.type !== 'knight';
 
       function applyConcreteTrajectory(u, fromVec, toVec) {
-        const ease = isCapture ? (0.28 * u + 0.72 * easeInOutCubic(u)) : easeInOutCubic(u);
+        const ease = animateCaptureDuel ? (0.28 * u + 0.72 * easeInOutCubic(u)) : easeInOutCubic(u);
         let bx = fromVec.x + (toVec.x - fromVec.x) * ease;
         let bz = fromVec.z + (toVec.z - fromVec.z) * ease;
         let by = BOARD_SURFACE_Y;
@@ -4293,7 +4295,7 @@ export function initWizardChess() {
         );
       }
 
-      if (isCapture) {
+      if (animateCaptureDuel) {
         activeDuelSavedCam = {
           pos: savedCamPos.clone(),
           target: savedTarget.clone()
@@ -4316,18 +4318,18 @@ export function initWizardChess() {
       const SWING_START_CLIP_TIME = atkProfile.swingStartClip;
       const CONTACT_CLIP_TIME = atkProfile.contactClip; // Weapon physically strikes defender, triggering flash & flinch
       const BLOW_CLIP_TIME = atkProfile.blowClip;       // After visible weapon impact, defender explodes into stone shards
-      const tApproach = isCapture
+      const tApproach = animateCaptureDuel
         ? Number((0.66 + Math.max(0, squaresMoved - 1) * 0.125).toFixed(3))
         : stdMoveDuration;
-      const tContact = isCapture ? (tApproach + CONTACT_CLIP_TIME / atkProfile.timeScale) : stdMoveDuration;
-      const tImpact = isCapture ? (tApproach + BLOW_CLIP_TIME / atkProfile.timeScale) : stdMoveDuration;
-      const tStrikeDone = isCapture ? (tImpact + 0.48) : stdMoveDuration;
+      const tContact = animateCaptureDuel ? (tApproach + CONTACT_CLIP_TIME / atkProfile.timeScale) : stdMoveDuration;
+      const tImpact = animateCaptureDuel ? (tApproach + BLOW_CLIP_TIME / atkProfile.timeScale) : stdMoveDuration;
+      const tStrikeDone = animateCaptureDuel ? (tImpact + 0.48) : stdMoveDuration;
       // Slower, distance-aware post-attack camera return (~1.30s - 1.60s instead of 0.64s)
       const camReturnDist = savedCamPos.distanceTo(duelCamClose);
-      const returnDuration = isCapture ? Number((1.18 + Math.min(0.42, camReturnDist * 0.10)).toFixed(3)) : 0;
-      const totalDuration = isCapture ? (tStrikeDone + returnDuration) : stdMoveDuration;
+      const returnDuration = animateCaptureDuel ? Number((1.18 + Math.min(0.42, camReturnDist * 0.10)).toFixed(3)) : 0;
+      const totalDuration = animateCaptureDuel ? (tStrikeDone + returnDuration) : stdMoveDuration;
 
-      if (!isCapture) {
+      if (!animateCaptureDuel) {
         cameraTelemetry.lastSpaceMoveDuration = stdMoveDuration;
         cameraTelemetry.lastSquaresMoved = Number(squaresMoved.toFixed(3));
       } else {
@@ -4347,6 +4349,7 @@ export function initWizardChess() {
       let attackAnimStarted = false;
       let defenderFlinchTriggered = false;
       let shatterTriggered = false;
+      let capturedRemovedEarly = false;
       let impactActualTime = tImpact;
       const postShatterPiecePos = strikePos.clone();
       const postStrikePiecePos = strikePos.clone();
@@ -4395,13 +4398,13 @@ export function initWizardChess() {
         if (isCapture) {
           if (piece.color === 'w') capturedByWhite += 1;
           else capturedByBlack += 1;
-          if (!executeInstantly) {
-            activeDuelSavedCam = null;
-            camera.position.copy(savedCamPos);
-            orbitControls.target.copy(savedTarget);
-            orbitControls.enabled = true;
-            orbitControls.update();
-          }
+        }
+        if (animateCaptureDuel && !executeInstantly) {
+          activeDuelSavedCam = null;
+          camera.position.copy(savedCamPos);
+          orbitControls.target.copy(savedTarget);
+          orbitControls.enabled = true;
+          orbitControls.update();
         }
 
         enPassantTarget = nextEnPassantTarget;
@@ -4496,9 +4499,13 @@ export function initWizardChess() {
       function stepMove(dt) {
         elapsed += dt;
 
-        if (!isCapture) {
+        if (!animateCaptureDuel) {
           const u = Math.min(1, elapsed / totalDuration);
           applyConcreteTrajectory(u, startPos, endPos);
+          if (isCapture && captured && captured.mesh && !capturedRemovedEarly && u >= 0.78) {
+            capturedRemovedEarly = true;
+            scene.remove(captured.mesh);
+          }
           if (isCastling && castleRook && castleRook.mesh) {
             const rEase = easeInOutCubic(u);
             castleRook.mesh.position.set(

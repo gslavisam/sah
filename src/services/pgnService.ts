@@ -148,12 +148,30 @@ export function parsePgnToLesson(pgnText: string): ChessAcademyLesson {
     }
   }
 
-  const white = headers.White && headers.White !== '?' ? headers.White.trim() : 'Beli';
-  const black = headers.Black && headers.Black !== '?' ? headers.Black.trim() : 'Crni';
-  const event = headers.Event && headers.Event !== '?' ? headers.Event.trim() : 'Uvezena PGN partija';
-  const rawDate = headers.Date && headers.Date !== '????.??.??' ? headers.Date.split('.')[0] : '';
+  const cleanTag = (val?: string) => {
+    const trimmed = val?.trim();
+    if (!trimmed || trimmed === '?' || trimmed === '????.??.??') return '';
+    return trimmed;
+  };
+  const white = cleanTag(headers.White) || 'Beli';
+  const black = cleanTag(headers.Black) || 'Crni';
+  const whiteElo = cleanTag(headers.WhiteElo);
+  const blackElo = cleanTag(headers.BlackElo);
+  const event = cleanTag(headers.Event) || 'Uvezena PGN partija';
+  const site = cleanTag(headers.Site);
+  const fullDate = cleanTag(headers.Date);
+  const rawDate = fullDate ? fullDate.split('.')[0] : '';
   const year = rawDate && !rawDate.includes('?') ? rawDate : '';
-  const eco = headers.ECO && headers.ECO !== '?' ? headers.ECO.trim() : '';
+  const eco = cleanTag(headers.ECO);
+  const openingFromEcoUrl = (() => {
+    const rawUrl = cleanTag(headers.ECOUrl);
+    if (!rawUrl) return '';
+    const slug = rawUrl.split('/').filter(Boolean).pop() || '';
+    return slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+  })();
+  const openingName = [cleanTag(headers.Opening) || openingFromEcoUrl, cleanTag(headers.Variation)]
+    .filter(Boolean)
+    .join(': ');
   const result = headers.Result && headers.Result !== '*' ? headers.Result.trim() : '';
 
   const commentsMap = new Map<string, string>();
@@ -215,6 +233,18 @@ export function parsePgnToLesson(pgnText: string): ChessAcademyLesson {
     steps,
     isCustom: true,
     createdAt: Date.now(),
+    gameInfo: {
+      white: white !== 'Beli' ? white : undefined,
+      black: black !== 'Crni' ? black : undefined,
+      whiteElo: whiteElo || undefined,
+      blackElo: blackElo || undefined,
+      event: event !== 'Uvezena PGN partija' ? event : undefined,
+      site: site && !site.startsWith('http') ? site : undefined,
+      date: fullDate || year || undefined,
+      result: result || undefined,
+      eco: eco || undefined,
+      opening: openingName || undefined,
+    },
   };
 }
 

@@ -7,9 +7,18 @@ import {
   ACADEMY_TUTORIAL_CATEGORIES,
   CHESS_ACADEMY_LESSONS,
   type AcademyCategory,
-  type ChessAcademyLesson
+  type ChessAcademyLesson,
+  type GameEducationalBrief
 } from '../data/chessAcademyLessons';
 import { reconstructLessonFen } from '../services/pgnService';
+import {
+  buildLocalGameBrief,
+  getAutoOpenBriefPreference,
+  getCachedGameBrief,
+  getLessonBriefCacheKey,
+  getOrCreateGameBrief,
+  setAutoOpenBriefPreference
+} from '../services/gameBriefService';
 import {
   fetchLichessMasterGamePgn,
   fetchLichessMasterStats,
@@ -62,6 +71,7 @@ type AcademyProps = {
   tutorialStepIndex: number;
   tutorialAnimating: boolean;
   tutorialGameOver: boolean;
+  tutorialAutoPlay: boolean;
   customLessons: ChessAcademyLesson[];
   error: string | null;
   onClose: () => void;
@@ -74,11 +84,15 @@ type AcademyProps = {
   onOpenTutorial: (category?: AcademyCategory) => void;
   onSelectTutorialLesson: (lessonId: string) => void;
   onPlayTutorialStep: () => void;
+  onPrevTutorialStep: () => void;
+  onToggleTutorialAutoPlay: () => void;
+  onStartTutorialAutoPlay: () => void;
   onResetTutorialLesson: () => void;
   onTakeOverTutorial: () => void;
   onLeaveTutorial: () => void;
   onImportPgn: (pgnText: string) => { ok: boolean; error?: string };
   onDeleteCustomLesson: (lessonId: string) => void;
+  onCacheLessonBrief?: (lessonId: string, brief: GameEducationalBrief) => void;
 };
 
 type AreaId = AcademyAreaId | 'puzzles';
@@ -92,6 +106,7 @@ export function Academy({
   tutorialStepIndex,
   tutorialAnimating,
   tutorialGameOver,
+  tutorialAutoPlay,
   customLessons,
   error,
   onClose,
@@ -104,11 +119,15 @@ export function Academy({
   onOpenTutorial,
   onSelectTutorialLesson,
   onPlayTutorialStep,
+  onPrevTutorialStep,
+  onToggleTutorialAutoPlay,
+  onStartTutorialAutoPlay,
   onResetTutorialLesson,
   onTakeOverTutorial,
   onLeaveTutorial,
   onImportPgn,
-  onDeleteCustomLesson
+  onDeleteCustomLesson,
+  onCacheLessonBrief
 }: AcademyProps) {
   const [selectedArea, setSelectedArea] = useState<AreaId | null>(null);
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
@@ -116,6 +135,11 @@ export function Academy({
   const [answerSubmitted, setAnswerSubmitted] = useState(false);
   const [, setProgressVersion] = useState(0);
   const [importerOpen, setImporterOpen] = useState(false);
+  const [leftPanelMinimized, setLeftPanelMinimized] = useState(false);
+  const [briefModalOpen, setBriefModalOpen] = useState(false);
+  const [briefData, setBriefData] = useState<GameEducationalBrief | null>(null);
+  const [briefLoading, setBriefLoading] = useState(false);
+  const [autoOpenBrief, setAutoOpenBrief] = useState<boolean>(() => getAutoOpenBriefPreference());
   const [importTab, setImportTab] = useState<ImportSourceTab>('masters');
   const [pgnDraft, setPgnDraft] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
@@ -142,6 +166,8 @@ export function Academy({
   const panelRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const onlineFetchAbortRef = useRef<AbortController | null>(null);
+  const lastAutoBriefKeyRef = useRef<string | null>(null);
+  const briefReqSeqRef = useRef(0);
   const selectedLesson = selectedArea && selectedArea !== 'puzzles' && selectedLessonId
     ? LESSONS_BY_AREA[selectedArea].find((lesson) => lesson.id === selectedLessonId)
     : undefined;
@@ -253,6 +279,60 @@ export function Academy({
   }, [view]);
 
   useEffect(() => {
+    if (view !== 'tutorial') {
+      setLeftPanelMinimized(false);
+      setBriefModalOpen(false);
+      setBriefLoading(false);
+      lastAutoBriefKeyRef.current = null;
+      return;
+    }
+
+    const lessonKey = getLessonBriefCacheKey(activeTutorialLesson);
+    const shouldAutoOpen =
+      autoOpenBrief &&
+      (Boolean(activeTutorialLesson.isCustom) || activeTutorialLesson.category === 'Poznata partija');
+
+    if (lastAutoBriefKeyRef.current !== lessonKey) {
+      lastAutoBriefKeyRef.current = lessonKey;
+      setBriefModalOpen(shouldAutoOpen);
+    }
+  }, [view, activeTutorialLesson, autoOpenBrief]);
+
+  useEffect(() => {
+    if (view !== 'tutorial' || !briefModalOpen) return;
+
+    const cached = getCachedGameBrief(activeTutorialLesson);
+    if (cached && cached.source === 'gemini') {
+      setBriefData(cached);
+      setBriefLoading(false);
+      return;
+    }
+
+    const lichessOpening =
+      lichessStats.status === 'ready' && (lichessStats.eco || lichessStats.openingName)
+        ? { eco: lichessStats.eco, name: lichessStats.openingName }
+        : null;
+
+    setBriefData(cached ?? buildLocalGameBrief(activeTutorialLesson, lichessOpening));
+    setBriefLoading(true);
+    const reqSeq = ++briefReqSeqRef.current;
+
+    void getOrCreateGameBrief(activeTutorialLesson, { lichessOpening })
+      .then((res) => {
+        if (reqSeq !== briefReqSeqRef.current) return;
+        setBriefData(res.brief);
+        if (activeTutorialLesson.isCustom) {
+          onCacheLessonBrief?.(activeTutorialLesson.id, res.brief);
+        }
+      })
+      .finally(() => {
+        if (reqSeq === briefReqSeqRef.current) {
+          setBriefLoading(false);
+        }
+      });
+  }, [view, briefModalOpen, activeTutorialLesson]);
+
+  useEffect(() => {
     panelRef.current?.scrollTo({ top: 0 });
   }, [view, selectedArea, selectedLessonId, tutorialLessonId]);
 
@@ -266,7 +346,9 @@ export function Academy({
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (view === 'puzzle') {
+      if (briefModalOpen) {
+        setBriefModalOpen(false);
+      } else if (view === 'puzzle') {
         onLeavePuzzle();
       } else if (view === 'tutorial') {
         onLeaveTutorial();
@@ -282,7 +364,7 @@ export function Academy({
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [onClose, onLeavePuzzle, onLeaveTutorial, selectedArea, selectedLessonId, view]);
+  }, [briefModalOpen, onClose, onLeavePuzzle, onLeaveTutorial, selectedArea, selectedLessonId, view]);
 
   const openLesson = (id: string) => {
     setSelectedLessonId(id);
@@ -748,6 +830,7 @@ export function Academy({
   };
 
   const isBoardDockMode = view === 'puzzle' || view === 'tutorial';
+  const isLeftMinimized = view === 'tutorial' && leftPanelMinimized;
   const title =
     view === 'puzzle'
       ? 'Zagonetka'
@@ -760,30 +843,51 @@ export function Academy({
 
   return (
     <div
-      className={`academy-backdrop ${isBoardDockMode ? 'puzzle-mode' : ''}`}
+      className={`academy-backdrop ${isBoardDockMode ? 'puzzle-mode' : ''} ${view === 'tutorial' ? 'tutorial-mode' : ''}`}
       role="dialog"
       aria-modal={view === 'home'}
       aria-labelledby="academy-title"
     >
-      <section className="academy-panel" ref={panelRef}>
+      <section className={`academy-panel ${isLeftMinimized ? 'minimized' : ''}`} ref={panelRef}>
         <header className="academy-header">
-          <div>
+          <div className="academy-header-copy">
             <p className="academy-eyebrow">
-              {view === 'tutorial' ? 'MENTOR ALISTAIR • 3D TUTORIJAL' : 'WIZARD CHESS • UČIONICA'}
+              {view === 'tutorial'
+                ? isLeftMinimized
+                  ? `3D TUTORIJAL · KORAK ${tutorialStepIndex}/${totalTutorialSteps}`
+                  : 'MENTOR ALISTAIR • 3D TUTORIJAL'
+                : 'WIZARD CHESS • UČIONICA'}
             </p>
             <h1 id="academy-title">{title}</h1>
           </div>
-          <button
-            type="button"
-            className="academy-close"
-            onClick={goBack}
-            aria-label={isBoardDockMode || selectedArea ? 'Nazad' : 'Nazad u partiju'}
-          >
-            {isBoardDockMode || selectedArea ? '←' : '✕'}
-          </button>
+          <div className="academy-header-actions">
+            {view === 'tutorial' ? (
+              <button
+                type="button"
+                id="btn-academy-minimize"
+                className="academy-minimize"
+                onClick={() => setLeftPanelMinimized((prev) => !prev)}
+                aria-expanded={!isLeftMinimized}
+                aria-label={isLeftMinimized ? 'Proširi levi panel' : 'Smanji levi panel'}
+                title={isLeftMinimized ? 'Proširi levi panel' : 'Smanji levi panel'}
+              >
+                {isLeftMinimized ? '▼' : '▲'}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="academy-close"
+              onClick={goBack}
+              aria-label={isBoardDockMode || selectedArea ? 'Nazad' : 'Nazad u partiju'}
+            >
+              {isBoardDockMode || selectedArea ? '←' : '✕'}
+            </button>
+          </div>
         </header>
 
-        {error ? <p className="academy-error" role="alert">{error}</p> : null}
+        {!isLeftMinimized ? (
+          <>
+            {error ? <p className="academy-error" role="alert">{error}</p> : null}
 
         {view === 'puzzle' && puzzle ? (
           <div className="academy-puzzle-content">
@@ -1067,68 +1171,6 @@ export function Academy({
                 </>
               ) : null}
             </section>
-
-            <div className="academy-actions">
-              {!isTutorialFinished ? (
-                <button
-                  type="button"
-                  id="btn-tutorial-next-step"
-                  className="academy-primary-compact"
-                  disabled={tutorialAnimating}
-                  onClick={onPlayTutorialStep}
-                >
-                  {tutorialAnimating
-                    ? 'Animacija poteza...'
-                    : tutorialStepIndex === 0
-                      ? 'Pokreni 1. potez →'
-                      : 'Sledeći potez →'}
-                </button>
-              ) : nextTutorialLesson ? (
-                <button
-                  type="button"
-                  id="btn-tutorial-next-lesson"
-                  className="academy-primary-compact"
-                  disabled={tutorialAnimating}
-                  onClick={() => onSelectTutorialLesson(nextTutorialLesson.id)}
-                >
-                  Sledeća lekcija →
-                </button>
-              ) : null}
-
-              <button
-                type="button"
-                id="btn-tutorial-reset"
-                className="academy-secondary-button"
-                disabled={tutorialStepIndex === 0 || tutorialAnimating}
-                onClick={onResetTutorialLesson}
-              >
-                ↺ Ispočetka
-              </button>
-
-              <button
-                type="button"
-                id="btn-tutorial-takeover"
-                className="academy-takeover-button"
-                disabled={tutorialAnimating || tutorialGameOver}
-                title={
-                  tutorialGameOver
-                    ? 'Partija je već završena matom na tabli'
-                    : 'Preuzmi ovu poziciju i nastavi partiju protiv AI protivnika'
-                }
-                onClick={onTakeOverTutorial}
-              >
-                ⚔ Igraj odavde
-              </button>
-
-              <button
-                type="button"
-                className="academy-secondary-button"
-                disabled={tutorialAnimating}
-                onClick={onLeaveTutorial}
-              >
-                Nazad
-              </button>
-            </div>
           </div>
         ) : !selectedArea ? (
           <>
@@ -1335,7 +1377,254 @@ export function Academy({
             </div>
           </>
         )}
+          </>
+        ) : null}
       </section>
+
+      {view === 'tutorial' ? (
+        <aside
+          id="academy-tutorial-controls"
+          className="academy-tutorial-float"
+          aria-label="Kontrole reprodukcije partije"
+        >
+          <div className="academy-tutorial-float-header">
+            <span className="academy-eyebrow">KONTROLA PARTIJE</span>
+            <span className="academy-tutorial-counter">
+              Korak {tutorialStepIndex} / {totalTutorialSteps}
+            </span>
+          </div>
+
+          <progress
+            className="academy-tutorial-progress"
+            max={Math.max(1, totalTutorialSteps)}
+            value={tutorialStepIndex}
+            aria-label="Napredak kroz partiju"
+          />
+
+          <div className="academy-tutorial-float-status" aria-live="polite">
+            {tutorialAnimating ? (
+              <span>Animacija poteza...</span>
+            ) : isTutorialFinished ? (
+              <span className="done">
+                {tutorialGameOver ? 'Šah-mat na tabli ✓' : 'Kraj partije ✓'}
+              </span>
+            ) : nextTutorialStep ? (
+              <span>
+                {currentTutorialStep ? `Odigrano: ${currentTutorialStep.moveNumber} · ` : ''}
+                Sledeći: <strong>{nextTutorialStep.moveNumber}</strong>
+              </span>
+            ) : null}
+          </div>
+
+          <div className="academy-tutorial-float-grid">
+            <button
+              type="button"
+              id="btn-tutorial-autoplay"
+              className={`academy-autoplay-button ${tutorialAutoPlay ? 'active' : ''}`}
+              disabled={isTutorialFinished || tutorialGameOver || totalTutorialSteps === 0}
+              onClick={onToggleTutorialAutoPlay}
+              title={
+                tutorialAutoPlay
+                  ? 'Zaustavi automatsko puštanje poteza'
+                  : 'Automatski puštaj poteze partije redom'
+              }
+            >
+              {tutorialAutoPlay ? '⏸ Pauza' : '▶ Pusti'}
+            </button>
+
+            {!isTutorialFinished ? (
+              <button
+                type="button"
+                id="btn-tutorial-next-step"
+                className="academy-primary-compact"
+                disabled={tutorialAnimating || tutorialAutoPlay}
+                onClick={onPlayTutorialStep}
+              >
+                {tutorialStepIndex === 0 ? '1. potez →' : 'Sledeći →'}
+              </button>
+            ) : nextTutorialLesson ? (
+              <button
+                type="button"
+                id="btn-tutorial-next-lesson"
+                className="academy-primary-compact"
+                disabled={tutorialAnimating}
+                onClick={() => onSelectTutorialLesson(nextTutorialLesson.id)}
+              >
+                Sledeća →
+              </button>
+            ) : (
+              <button
+                type="button"
+                id="btn-tutorial-next-step"
+                className="academy-primary-compact"
+                disabled
+              >
+                Kraj ✓
+              </button>
+            )}
+
+            <button
+              type="button"
+              id="btn-tutorial-prev-step"
+              className="academy-secondary-button"
+              disabled={tutorialStepIndex === 0 || tutorialAnimating}
+              onClick={onPrevTutorialStep}
+            >
+              ← Prethodni
+            </button>
+
+            <button
+              type="button"
+              id="btn-tutorial-reset"
+              className="academy-secondary-button"
+              disabled={tutorialStepIndex === 0 || tutorialAnimating}
+              onClick={onResetTutorialLesson}
+            >
+              ↺ Ispočetka
+            </button>
+          </div>
+
+          <div className="academy-tutorial-float-footer">
+            <button
+              type="button"
+              id="btn-tutorial-takeover"
+              className="academy-takeover-button academy-takeover-span"
+              disabled={tutorialAnimating || tutorialGameOver}
+              title={
+                tutorialGameOver
+                  ? 'Partija je već završena matom na tabli'
+                  : 'Preuzmi ovu poziciju i nastavi partiju protiv AI protivnika'
+              }
+              onClick={onTakeOverTutorial}
+            >
+              ⚔ Igraj odavde
+            </button>
+
+            <button
+              type="button"
+              id="btn-tutorial-brief"
+              className="academy-brief-trigger"
+              onClick={() => setBriefModalOpen(true)}
+              title="Pročitaj edukativni pregled partije (ko, kada, otvaranje, strategija)"
+            >
+              📖 O partiji
+            </button>
+
+            <button
+              type="button"
+              id="btn-tutorial-back"
+              className="academy-secondary-button"
+              disabled={tutorialAnimating}
+              onClick={onLeaveTutorial}
+            >
+              Nazad
+            </button>
+          </div>
+        </aside>
+      ) : null}
+
+      {view === 'tutorial' && briefModalOpen && briefData ? (
+        <div
+          id="academy-game-brief-modal"
+          className="academy-brief-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="academy-brief-title"
+          onClick={() => setBriefModalOpen(false)}
+        >
+          <article className="academy-brief-card" onClick={(e) => e.stopPropagation()}>
+            <header className="academy-brief-header">
+              <div className="academy-brief-heading">
+                <span className="academy-eyebrow">EDUKATIVNI PREGLED PARTIJE</span>
+                <h2 id="academy-brief-title">{briefData.title}</h2>
+                <p className="academy-brief-players">{briefData.playersLine}</p>
+              </div>
+              <button
+                type="button"
+                id="btn-brief-close-x"
+                className="academy-close"
+                onClick={() => setBriefModalOpen(false)}
+                aria-label="Zatvori pregled partije"
+              >
+                ✕
+              </button>
+            </header>
+
+            <div className="academy-brief-meta-row">
+              <span className="academy-brief-context">{briefData.contextLine}</span>
+              <span className={`academy-brief-source ${briefData.source === 'gemini' ? 'ai' : 'local'}`}>
+                {briefLoading
+                  ? '⏳ Priprema analize...'
+                  : briefData.source === 'gemini'
+                    ? '✨ AI analiza · Sačuvano'
+                    : '📘 Automatski pregled · Sačuvano'}
+              </span>
+            </div>
+
+            <div className="academy-brief-sections">
+              <section className="academy-brief-block">
+                <h3>♟ Otvaranje i ideja</h3>
+                <p>{briefData.openingLine}</p>
+              </section>
+
+              <section className="academy-brief-block">
+                <h3>🧭 Strategija i karakteristike</h3>
+                <p>{briefData.strategySummary}</p>
+              </section>
+
+              {briefData.keyMoments.length > 0 ? (
+                <section className="academy-brief-block">
+                  <h3>⚡ Karakteristični potezi</h3>
+                  <ul className="academy-brief-moments">
+                    {briefData.keyMoments.map((moment, idx) => (
+                      <li key={idx}>{moment}</li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+            </div>
+
+            <footer className="academy-brief-footer">
+              <label className="academy-brief-autocheck">
+                <input
+                  type="checkbox"
+                  checked={autoOpenBrief}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setAutoOpenBrief(next);
+                    setAutoOpenBriefPreference(next);
+                  }}
+                />
+                <span>Otvaraj automatski pri učitavanju partije</span>
+              </label>
+
+              <div className="academy-brief-actions">
+                <button
+                  type="button"
+                  id="btn-brief-close"
+                  className="academy-secondary-button"
+                  onClick={() => setBriefModalOpen(false)}
+                >
+                  Zatvori
+                </button>
+                {!isTutorialFinished && !tutorialGameOver ? (
+                  <button
+                    type="button"
+                    id="btn-brief-play"
+                    className="academy-primary-compact"
+                    onClick={() => {
+                      setBriefModalOpen(false);
+                      onStartTutorialAutoPlay();
+                    }}
+                  >
+                    ▶ Zatvori i pusti partiju
+                  </button>
+                ) : null}
+              </div>
+            </footer>
+          </article>
+        </div>
+      ) : null}
     </div>
   );
 }
