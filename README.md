@@ -8,11 +8,16 @@
   - **Sunčani Park (Zen režim)** — proceduralni popločani trg na otvorenom sa kamenom tablom visokog kontrasta, bez 3D protivnika i bez glasovnih komentara (čista 3D igra i tekstualni saveti).
   - **Gotička katedrala (Duel režim)** — detaljan 3D hram sa tri tematska okruženja i hologramskim protivnicima koji prate dešavanja na tabli.
   - **Klasična 2D Staunton tabla** (`⬚ 2D`, prečica `2`) — trenutni odziv poteza, okretanje table, prikaz šaha/mata/remija i sinhronizacija sa 3D scenom.
-- **Sedam setova figura:** podrazumevani dvobojni klasični Staunton GLB (`klasicni` — *Klasični*), čarobnjački GLB (`wizard`), proceduralni antički (`ancient`), „Zmajevi i vitezovi“ (`dragon`), proceduralni „Srednji vek“ (`medieval`) i lenjo učitani dvobojni GLB setovi `vitez` i `srpski` (izbor se čuva u pregledaču).
+- **Sedam setova figura:** podrazumevani dvobojni klasični Staunton GLB (`klasicni` — *Klasični*), čarobnjački GLB (`wizard`), proceduralni antički (`ancient`), „Zmajevi“ (`dragon`), proceduralni „Srednji vek“ (`medieval`) i lenjo učitani dvobojni GLB setovi `vitez` i `srpski` (izbor se čuva u pregledaču).
 - **Stockfish 19 Lite WASM analiza, saveti i Vođeni režim:**
   - **Evaluaciona traka (`EvalBar`)** uživo u 3D HUD-u i 2D tabli, uz detekciju grešaka i blundera.
   - **Pet nivoa težine AI protivnika** (*Početnik*, *Rekreativac*, *Srednji*, *Napredni*, *Majstor*) od ~600 do ~2180 Elo, sa Stockfish `MultiPV` kalibracijom za niže nivoe, `UCI_LimitStrength` za više nivoe i lokalnim JS minimax fallback-om.
   - **Ručni savet (`💡 Savet`)** i **Vođeni režim (`🧭 Vođeni`)**: kada je **Vođeni režim** uključen, preporuka najboljeg poteza (tirkizno polazno i zlatno ciljno polje + objašnjenje) automatski se prikazuje na svaki tvoj potez bez potrebe da stalno klikćeš „Savet“.
+- **Režim Analize (`🔬 Analiza`) — slobodna tabla, Editor table i slika u FEN:**
+  - Omogućava ručno odigravanje poteza za **obe strane** (bez automatskog odgovora AI-ja, sa brzim uzimanjem bez duel-animacija i vraćanjem po 1 potez), idealno za praćenje partije uživo ili na drugoj platformi.
+  - **Editor table (`✎ Uredi tablu`)**: ručno postavljanje, premeštanje i brisanje figura na 2D tabli sa izborom ko je na potezu, rokadama i validacijom uživo — po primeni automatski predlaže najbolji sledeći potez.
+  - Izbor praćene strane (*Beli*, *Crni* ili *Oba*), promena ko je na potezu, unos/kopiranje **FEN** pozicije i **prepoznavanje slike table (`📷 Slika pozicije` ili `Ctrl+V`)** pomoću multimodalnog Gemini servisa (`/api/gemini/board-from-image`).
+  - Potezi u Režimu Analize ne dodeljuju XP niti ulaze u istoriju mečeva.
 - **Tri AI komentatora na srpskom jeziku:** Alistair (*Mudri Arhimag*), Grix (*Goblin Roastmaster*) i Valerius (*Gordi Vitez*), sa unapred generisanim MP3 glasovnim replikama, proceduralnim Web Audio zvučnim efektima i opcionim Google Gemini serverskim posrednikom.
 - **Šahovska akademija i 3D Tutorijal:**
   - **Taktičke vežbe i kvizovi:** 12 mat-u-jednom zagonetki sa tri postepena nagoveštaja i 36 lekcija raspoređenih u oblasti *Poznate partije*, *Otvaranja* i *Strategija*.
@@ -38,7 +43,7 @@ Aplikacija se pokreće kao full-stack Express + Vite server na portu `3000` (`ht
 
 ## Gemini AI (opciono)
 
-Aplikacija radi potpuno samostalno koristeći Stockfish WASM i ugrađene lokalne odgovore komentatora. Za dinamičke Gemini komentare i objašnjenja saveta:
+Aplikacija radi potpuno samostalno koristeći Stockfish WASM i ugrađene lokalne odgovore komentatora. Za dinamičke Gemini komentare, obrazovne preglede partija i prepoznavanje pozicije sa slike table (`📷 Slika pozicije`):
 
 1. Nabavi Gemini API ključ preko [Google AI Studio](https://aistudio.google.com/apikey).
 2. Postavi promenljivu okruženja na serveru (npr. u `.env.local` za lokalni razvoj):
@@ -47,19 +52,20 @@ Aplikacija radi potpuno samostalno koristeći Stockfish WASM i ugrađene lokalne
 GEMINI_API_KEY=unesi_svoj_kljuc
 ```
 
-Ključ ostaje isključivo na serverskoj strani (`server.ts` posreduje kroz `/api/gemini/status` i `/api/gemini/generate`) i nikada se ne šalje u klijentski JavaScript bundle.
+Ključ ostaje isključivo na serverskoj strani (`server.ts` posreduje kroz `/api/gemini/status`, `/api/gemini/generate` i `/api/gemini/board-from-image`) i nikada se ne šalje u klijentski JavaScript bundle.
 
-## Kontrole i donji meni (3 kapsule)
+## Kontrole, gornji HUD i donji meni (3 kapsule)
 
 - Klikni ili dodirni figuru, pa polje na koje želiš da je pomeriš (pri ulasku pešaka u poslednji red biraš promociju: kraljica, top, lovac ili skakač).
+- **Gornja traka (`#hud-top`):**
+  - **Levo:** **Wizard Chess 3D `[⬚ 2D]`** (prečica `2` — brzi prelazak na klasičnu 2D tablu, a u 2D prikazu dugme **🏰 3D** vraća nazad) + indikator poteza.
+  - **Desno:** **XP nivo**, **👤 Prijava / Gost** + **⚔ Online** (kreiranje ili ulazak u online duel sobu) i izbor **AI mentora**.
 - **Kapsula „Režimi“:**
   - **✦ Akademija** — zagonetke, kviz lekcije, 3D Tutorijal i uvoz PGN/Lichess/Chess.com partija.
-  - **⚔ Online** — kreiranje ili ulazak u online duel sobu.
-  - **⬚ 2D / 🏰 3D** (prečica `2`) — prebacivanje između 3D scene i klasične 2D table.
-  - **🌳 Park / 🏛️ Katedrala** — prebacivanje između Sunčanog Parka (Zen režim) i Gotičke katedrale.
+  - **🔬 Analiza** — slobodna tabla za obe strane, Editor table (`✎ Uredi tablu`), učitavanje FEN-a i skeniranje slike pozicije (dostupno i u 2D tabli).
   - **🧭 Vođeni** — uključuje/isključuje automatsku preporuku za svaki tvoj potez (dostupno i u 2D tabli).
 - **Kapsula „Partija“:** **⏳ Vrati** (`U` ili `Ctrl+Z`), **⚡ AI** (odmah pokreće AI potez), **🔄 Nova** (nova partija), **⬇ PGN** (preuzimanje PGN zapisa odigrane partije).
-- **Kapsula „Podešavanja“:** **♟ Set figura** (7 setova), **⚔ Težina AI** (5 nivoa: *Početnik*, *Rekreativac*, *Srednji*, *Napredni*, *Majstor*), **⮂ Igraj crnim / belim**, **🎥 Igrač / Odozgo**, **👁 Sakrij [H]**.
+- **Kapsula „Podešavanja“:** **♟ Set figura ▾** (padajući meni sa 7 setova), **⚔ Težina AI ▾** (padajući meni sa 5 nivoa: *Početnik*, *Rekreativac*, *Srednji*, *Napredni*, *Majstor*), **🌳 Park / 🏛️ Katedrala** (ambijent scene), **⮂ Igraj crnim / belim**, **🎥 Igrač / Odozgo**, **👁 Sakrij [H]**.
 - Na dodirnom ekranu: prevlačenje jednim prstom rotira kameru, prevlačenje sa dva prsta pomera pogled, a štipanje zumira.
 
 ## Komande

@@ -5,7 +5,7 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { createSceneEnvironments } from './services/sceneEnvironments';
 import { SCENE_THEMES } from './services/sceneThemes';
 import { createOpponentHologramSystem } from './services/opponentHolograms';
-import { boardToFen, DEFAULT_START_FEN, parseFenPosition, squareToCoords } from './shared/chessRules';
+import { boardToFen, DEFAULT_START_FEN, parseFenPosition, squareToCoords, validateAndNormalizeFen } from './shared/chessRules';
 import { stockfishService } from './services/stockfishService';
 import { createOutdoorParkEnvironment } from './three/environments/outdoorParkEnv';
 
@@ -1766,6 +1766,7 @@ export function initWizardChess() {
     let gameMode = 'single';
     let playerColor = 'w'; // 'w' | 'b'
     let aiAutoPlay = true;
+    let analysisMode = false;
     let aiDifficulty = 'casual';
     let aiTimer = null;
     let academyMode = false;
@@ -2811,7 +2812,136 @@ export function initWizardChess() {
     }
 
     function syncOpponentHologramVisibility() {
-      opponentHologram.setModeVisible(!is2DModeActive && !academyMode && ambienceMode !== 'park');
+      opponentHologram.setModeVisible(!is2DModeActive && !academyMode && !analysisMode && ambienceMode !== 'park');
+    }
+
+    function setAnalysisMode(enabled) {
+      if (gameMode === 'online' || academyMode) return false;
+      const next = Boolean(enabled);
+      if (analysisMode === next) return analysisMode;
+
+      analysisMode = next;
+      aiSearchEpoch += 1;
+      isSearchingAIMove = false;
+      stockfishService.cancelPending();
+      if (aiTimer) {
+        clearTimeout(aiTimer);
+        aiTimer = null;
+      }
+
+      aiAutoPlay = !analysisMode;
+      opponentHologram.setThinking(false);
+      syncOpponentHologramVisibility();
+      updateTurnUI();
+
+      if (!analysisMode) {
+        maybeScheduleAIMove();
+      }
+
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(
+          new CustomEvent('wizardchess:analysis-mode', {
+            detail: {
+              enabled: analysisMode,
+              fen: getFen(),
+              currentTurn,
+              playerColor,
+            },
+          })
+        );
+      }
+      return analysisMode;
+    }
+
+    function loadCustomFenPosition(fen, options = {}) {
+      if (gameMode === 'online' || academyMode) return false;
+      const validation = validateAndNormalizeFen(fen || DEFAULT_START_FEN);
+      if (!validation.ok || !validation.state || !validation.fen) {
+        console.warn('Cannot load custom FEN position:', validation.error || 'invalid FEN');
+        return false;
+      }
+
+      const parsed = validation.state;
+      aiSearchEpoch += 1;
+      isSearchingAIMove = false;
+      stockfishService.newGame();
+      if (aiTimer) {
+        clearTimeout(aiTimer);
+        aiTimer = null;
+      }
+      activeMoveTweens.length = 0;
+      clearCheckmateSequence();
+      if (activeDuelSavedCam) {
+        camera.position.copy(activeDuelSavedCam.pos);
+        orbitControls.target.copy(activeDuelSavedCam.target);
+        activeDuelSavedCam = null;
+      }
+      orbitControls.enabled = true;
+      clearAllPieces();
+      clearSquareHighlights();
+      clearHintHighlight();
+      selectedSquare = null;
+      validMoves = [];
+      isAnimatingMove = false;
+
+      currentTurn = parsed.currentTurn;
+      enPassantTarget = parsed.enPassantTarget ? { ...parsed.enPassantTarget } : null;
+      halfMoveClock = parsed.halfMoveClock;
+      positionHistory = Array.isArray(parsed.positionHistory) ? parsed.positionHistory.slice() : [];
+      gameOver = Boolean(parsed.gameOver);
+      drawReason = parsed.drawReason || null;
+      moveHistory = [];
+      gameStartingFen = validation.fen;
+      matchResultOverride = null;
+
+      let whiteCount = 0;
+      let blackCount = 0;
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const cell = parsed.board[r][c];
+          if (cell) {
+            const inst = instantiatePiece(cell.type, cell.color, r, c);
+            inst.hasMoved = Boolean(cell.hasMoved);
+            boardState[r][c] = inst;
+            if (cell.color === 'w') whiteCount += 1;
+            else blackCount += 1;
+          }
+        }
+      }
+      capturedByWhite = Math.max(0, 16 - blackCount);
+      capturedByBlack = Math.max(0, 16 - whiteCount);
+
+      if (options.viewSide === 'w' || options.viewSide === 'b') {
+        playerColor = options.viewSide;
+        if (options.orientCamera !== false) {
+          playerCamSide = playerColor;
+          primaryCameraView = 'player';
+          setActiveCamButton('btn-camera-view');
+          notifyPrimaryCameraView();
+          setCameraForSide(playerColor, Boolean(options.immediateCamera));
+        }
+      }
+
+      opponentHologram.setPlayerSide(playerColor, true);
+      opponentHologram.setThinking(false);
+      renderer.shadowMap.needsUpdate = true;
+      updateTurnUI();
+
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(
+          new CustomEvent('wizardchess:reset', {
+            detail: {
+              fen: getFen(),
+              currentTurn,
+              playerColor,
+              customFen: true,
+              analysisMode,
+            },
+          })
+        );
+      }
+      maybeScheduleAIMove();
+      return true;
     }
 
     function setAmbienceMode(mode) {
@@ -3225,6 +3355,7 @@ export function initWizardChess() {
 
       gameMode = 'online';
       aiAutoPlay = false;
+      analysisMode = false;
       playerColor = assignedColor === 'b' ? 'b' : 'w';
 
       const chess = roomState.chess;
@@ -3325,6 +3456,7 @@ export function initWizardChess() {
 
     function exitOnlineMode() {
       gameMode = 'single';
+      analysisMode = false;
       aiAutoPlay = true;
       playerColor = 'w';
       resetChessBoard(true, { force: true });
@@ -3990,7 +4122,7 @@ export function initWizardChess() {
       const epCapturedC = isEnPassant ? matchedLegal.capturedC : -1;
       const captured = isEnPassant ? boardState[epCapturedR]?.[epCapturedC] : targetOnDest;
       const isCapture = Boolean(captured);
-      const skipCaptureDuel = Boolean(options.tutorialStep || academyTutorialMode);
+      const skipCaptureDuel = Boolean(options.tutorialStep || academyTutorialMode) || analysisMode;
       const animateCaptureDuel = isCapture && !skipCaptureDuel;
       const nextEnPassantTarget =
         piece.type === 'pawn' && Math.abs(toR - fromR) === 2
@@ -5110,14 +5242,14 @@ export function initWizardChess() {
             executeChessMove(fallback.fromR, fallback.fromC, fallback.toR, fallback.toC);
           }
         })
-        .finally(() => {
-          if (searchEpoch === aiSearchEpoch) {
-            isSearchingAIMove = false;
-            if (currentTurn === playerColor || gameOver) {
-              opponentHologram.setThinking(false);
+          .finally(() => {
+            if (searchEpoch === aiSearchEpoch) {
+              isSearchingAIMove = false;
+              if (analysisMode || currentTurn === playerColor || gameOver) {
+                opponentHologram.setThinking(false);
+              }
             }
-          }
-        });
+          });
 
       return true;
     }
@@ -5127,7 +5259,7 @@ export function initWizardChess() {
         clearTimeout(aiTimer);
         aiTimer = null;
       }
-      if (academyMode || gameOver || isAnimatingMove) return;
+      if (academyMode || analysisMode || gameOver || isAnimatingMove) return;
       if (gameMode !== 'single' || !aiAutoPlay) return;
 
       const aiColor = playerColor === 'w' ? 'b' : 'w';
@@ -5177,7 +5309,7 @@ export function initWizardChess() {
       // If it's player's turn, both player and AI have moved, so undo 2 half-moves (AI's move + Player's move)
       // so it becomes the player's turn again.
       // If it's AI's turn (e.g. before AI replied), undo 1 half-move.
-      if (gameMode === 'single') {
+      if (gameMode === 'single' && !analysisMode) {
         if (currentTurn === playerColor && moveHistory.length >= 2) {
           moveHistory.pop(); // Remove AI move
           const playerMoveEntry = moveHistory.pop(); // Remove player move
@@ -5646,7 +5778,7 @@ export function initWizardChess() {
       } else {
         const turnLabel = currentTurn === 'w' ? 'Beli na potezu' : 'Crni na potezu';
         const aiColor = playerColor === 'w' ? 'b' : 'w';
-        const isAiTurn = !academyMode && gameMode === 'single' && currentTurn === aiColor;
+        const isAiTurn = !academyMode && !analysisMode && gameMode === 'single' && currentTurn === aiColor;
         if (turnText) {
           if (gameMode === 'online' && !academyMode) {
             const isYourTurn = currentTurn === playerColor;
@@ -5668,6 +5800,8 @@ export function initWizardChess() {
           modeBadge.textContent = academyTutorialMode ? 'Akademija · 3D Tutorijal' : 'Akademija';
         } else if (gameMode === 'online') {
           modeBadge.textContent = `Online Duel • ${playerColor === 'w' ? 'Beli' : 'Crni'}`;
+        } else if (analysisMode) {
+          modeBadge.textContent = '🔬 Analiza (2 strane)';
         } else {
           modeBadge.textContent = `Igraš kao ${playerColor === 'w' ? 'beli' : 'crni'}`;
         }
@@ -5705,8 +5839,8 @@ export function initWizardChess() {
       if (moveDist > 6) return;
       if (isAnimatingMove || gameOver || is2DModeActive || academyTutorialMode) return;
 
-      // Only allow moving the player's own side in single-player games
-      if (!academyMode && currentTurn !== playerColor) return;
+      // Only allow moving the player's own side in single-player/online games (unlocked in Academy & Analysis)
+      if (!academyMode && !analysisMode && currentTurn !== playerColor) return;
 
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -5909,6 +6043,22 @@ export function initWizardChess() {
     function toggleSide() {
       if (academyMode || gameMode === 'online') return false;
       playerColor = playerColor === 'w' ? 'b' : 'w';
+      if (analysisMode) {
+        playerCamSide = playerColor;
+        primaryCameraView = 'player';
+        setActiveCamButton('btn-camera-view');
+        notifyPrimaryCameraView();
+        setCameraForSide(playerColor, false);
+        updateTurnUI();
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(
+            new CustomEvent('wizardchess:side-changed', {
+              detail: { playerColor },
+            })
+          );
+        }
+        return true;
+      }
       resetChessBoard(true);
       return true;
     }
@@ -5965,6 +6115,9 @@ export function initWizardChess() {
       getAmbienceMode,
       setPieceSet,
       setAIDifficulty,
+      setAnalysisMode,
+      isAnalysisMode: () => analysisMode,
+      loadCustomFenPosition,
       set2DModeActive,
       toggleSide,
       setCameraPreset,
@@ -6031,6 +6184,7 @@ export function initWizardChess() {
         return {
           currentTurn,
           playerColor,
+          analysisMode,
           gameOver,
           drawReason,
           inCheck: isKingInCheck(currentTurn, boardState),

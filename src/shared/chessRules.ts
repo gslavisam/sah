@@ -871,6 +871,162 @@ export function parseFenPosition(fen: string = DEFAULT_START_FEN): ChessRulesSta
   return baseState;
 }
 
+export interface FenValidationResult {
+  ok: boolean;
+  fen?: string;
+  state?: ChessRulesState;
+  error?: string;
+  opponentInCheck?: boolean;
+}
+
+export function validateAndNormalizeFen(
+  fenInput: string,
+  overrideTurn?: PieceColor
+): FenValidationResult {
+  if (typeof fenInput !== 'string' || !fenInput.trim()) {
+    return { ok: false, error: 'FEN zapis je prazan.' };
+  }
+
+  const parts = fenInput.trim().split(/\s+/);
+  const placement = parts[0];
+  if (!placement) {
+    return { ok: false, error: 'Nedostaje raspored figura u FEN zapisu.' };
+  }
+
+  const effectiveTurn: PieceColor =
+    overrideTurn === 'w' || overrideTurn === 'b'
+      ? overrideTurn
+      : parts[1] === 'b'
+        ? 'b'
+        : 'w';
+  const normalizedInput = [
+    placement,
+    effectiveTurn,
+    parts[2] || '-',
+    overrideTurn && parts[1] && parts[1] !== overrideTurn ? '-' : parts[3] || '-',
+    parts[4] || '0',
+    parts[5] || '1',
+  ].join(' ');
+
+  const state = parseFenPosition(normalizedInput);
+  if (!state) {
+    return {
+      ok: false,
+      error: 'Neispravan FEN format. Proveri da li svaki od 8 redova ima tačno 8 polja.',
+    };
+  }
+
+  let whiteKings = 0;
+  let blackKings = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = state.board[r][c];
+      if (!piece) continue;
+      if (piece.type === 'king') {
+        if (piece.color === 'w') whiteKings += 1;
+        else blackKings += 1;
+      }
+      if (piece.type === 'pawn' && (r === 0 || r === 7)) {
+        return {
+          ok: false,
+          error: 'Pešaci ne mogu stajati na prvom ili osmom redu.',
+        };
+      }
+    }
+  }
+
+  if (whiteKings !== 1 || blackKings !== 1) {
+    return {
+      ok: false,
+      error: 'Pozicija mora sadržati tačno jednog belog i jednog crnog kralja.',
+    };
+  }
+
+  const opponentColor: PieceColor = state.currentTurn === 'w' ? 'b' : 'w';
+  if (isKingInCheck(opponentColor, state.board)) {
+    return {
+      ok: false,
+      opponentInCheck: true,
+      error:
+        opponentColor === 'w'
+          ? 'Beli kralj je već pod šahom dok je crni na potezu — promeni ko je na potezu.'
+          : 'Crni kralj je već pod šahom dok je beli na potezu — promeni ko je na potezu.',
+    };
+  }
+
+  const fen = boardToFen(state.board, {
+    currentTurn: state.currentTurn,
+    enPassantTarget: state.enPassantTarget,
+    halfMoveClock: state.halfMoveClock,
+    moveCount: state.moveCount,
+  });
+
+  return { ok: true, fen, state };
+}
+
+export interface EditorCastlingRights {
+  K: boolean;
+  Q: boolean;
+  k: boolean;
+  q: boolean;
+}
+
+export function buildFenFromEditorBoard(
+  board: ({ type: PieceType; color: PieceColor } | null)[][],
+  options: {
+    turn: PieceColor;
+    castling?: Partial<EditorCastlingRights>;
+  }
+): FenValidationResult {
+  if (!Array.isArray(board) || board.length !== 8) {
+    return { ok: false, error: 'Tabla mora imati tačno 8 redova.' };
+  }
+
+  const rankRows: string[] = [];
+  for (let r = 0; r < 8; r++) {
+    let empty = 0;
+    let rowStr = '';
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r]?.[c];
+      if (!piece) {
+        empty += 1;
+      } else {
+        if (empty > 0) {
+          rowStr += String(empty);
+          empty = 0;
+        }
+        const ch = FEN_PIECE_CHAR[piece.type] || 'p';
+        rowStr += piece.color === 'w' ? ch.toUpperCase() : ch.toLowerCase();
+      }
+    }
+    if (empty > 0) rowStr += String(empty);
+    rankRows.push(rowStr);
+  }
+
+  const cOpts = options.castling || {};
+  let castlingStr = '';
+  const wKing = board[7]?.[4];
+  if (wKing && wKing.type === 'king' && wKing.color === 'w') {
+    const wKRook = board[7]?.[7];
+    const wQRook = board[7]?.[0];
+    if (cOpts.K && wKRook && wKRook.type === 'rook' && wKRook.color === 'w') castlingStr += 'K';
+    if (cOpts.Q && wQRook && wQRook.type === 'rook' && wQRook.color === 'w') castlingStr += 'Q';
+  }
+  const bKing = board[0]?.[4];
+  if (bKing && bKing.type === 'king' && bKing.color === 'b') {
+    const bKRook = board[0]?.[7];
+    const bQRook = board[0]?.[0];
+    if (cOpts.k && bKRook && bKRook.type === 'rook' && bKRook.color === 'b') castlingStr += 'k';
+    if (cOpts.q && bQRook && bQRook.type === 'rook' && bQRook.color === 'b') castlingStr += 'q';
+  }
+  if (!castlingStr) castlingStr = '-';
+
+  const turn: PieceColor = options.turn === 'b' ? 'b' : 'w';
+  const rawFen = `${rankRows.join('/')} ${turn} ${castlingStr} - 0 1`;
+  return validateAndNormalizeFen(rawFen);
+}
+
+
 export function getStockfishEloProfile(
   personaId: StockfishPersonaId | string,
   difficulty: StockfishDifficulty | LegacyStockfishDifficulty | string

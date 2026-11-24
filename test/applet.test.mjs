@@ -145,7 +145,7 @@ test('Procedural chess sets are selectable without replacing the existing sculpt
   assert.ok(engine.includes('root.scale.setScalar(isBoardFitModelSet ? 1 : BOARD_SQ_SIZE)'), 'Normalized models must not receive a second global scale');
   assert.match(engine, /if \(isBoardFitModelSet\) \{[\s\S]*?child\.receiveShadow = true;[\s\S]*?\} else \{/);
   assert.ok(engine.includes("previousPieceSet === 'ancient' || previousPieceSet === 'dragon' || previousPieceSet === 'medieval'"), 'Procedural geometries must be disposed when leaving a generated set');
-  assert.ok(appTsx.includes("dragon: 'Zmajevi i vitezovi'"), 'Fantasy set must have a localized name');
+  assert.ok(appTsx.includes("dragon: 'Zmajevi'"), 'Fantasy set must have a localized name');
   assert.ok(appTsx.includes("medieval: 'Srednji vek'"), 'Medieval set must have a localized name');
   assert.ok(appTsx.includes("vitez: 'Vitez'"), 'Vitez set must be selectable by name');
   assert.ok(appTsx.includes("srpski: 'Srpski'"), 'Srpski set must be selectable by name');
@@ -1274,11 +1274,179 @@ test('Game Brief service builds local overview, caches Gemini brief persistently
   assert.ok(serverSrc.includes('maxOutputTokens'));
 });
 
+test('validateAndNormalizeFen validates kings, pawn ranks, opponent-in-check, and normalizes FEN turn overrides', async () => {
+  const { validateAndNormalizeFen } = await import('../src/shared/chessRules.ts');
 
+  const validRes = validateAndNormalizeFen('rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1');
+  assert.equal(validRes.ok, true);
+  assert.equal(validRes.state?.currentTurn, 'b');
 
+  // Partial placement + turn override works cleanly
+  const overrideRes = validateAndNormalizeFen('4k3/8/8/8/8/8/4P3/4K3 b - - 0 1', 'w');
+  assert.equal(overrideRes.ok, true);
+  assert.ok(overrideRes.fen?.includes(' w '));
 
+  // Missing black king must be rejected
+  const missingKing = validateAndNormalizeFen('8/8/8/8/8/8/4P3/4K3 w - - 0 1');
+  assert.equal(missingKing.ok, false);
 
+  // Pawn on 8th rank must be rejected
+  const badPawn = validateAndNormalizeFen('4k2P/8/8/8/8/8/8/4K3 w - - 0 1');
+  assert.equal(badPawn.ok, false);
 
+  // Opponent king already in check while not on move must be rejected
+  const illegalCheck = validateAndNormalizeFen('4k3/4Q3/8/8/8/8/8/4K3 w - - 0 1');
+  assert.equal(illegalCheck.ok, false);
+  assert.equal(illegalCheck.opponentInCheck, true);
+});
 
+test('Analysis Mode wires dual-side 2D/3D play, 1-ply undo, XP isolation, FEN loading, and Gemini Image-to-FEN', async () => {
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const board2dSrc = fs.readFileSync(path.join(ROOT, 'src/components/Classic2DBoard.tsx'), 'utf-8');
+  const panelSrc = fs.readFileSync(path.join(ROOT, 'src/components/AnalysisPanel.tsx'), 'utf-8');
+  const appSrc = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf-8');
 
+  // Engine hooks
+  assert.ok(engineSrc.includes('function setAnalysisMode(enabled)'));
+  assert.ok(engineSrc.includes('function loadCustomFenPosition(fen, options = {})'));
+  assert.ok(engineSrc.includes('if (gameMode === \'single\' && !analysisMode)'));
+  assert.ok(engineSrc.includes('Boolean(options.tutorialStep || academyTutorialMode) || analysisMode'));
+  assert.ok(engineSrc.includes('!is2DModeActive && !academyMode && !analysisMode'));
+  assert.ok(engineSrc.includes('if (!academyMode && !analysisMode && currentTurn !== playerColor) return;'));
+  assert.ok(engineSrc.includes('setAnalysisMode,'));
+  assert.ok(engineSrc.includes('loadCustomFenPosition,'));
 
+  // 2D & UI hooks
+  assert.ok(board2dSrc.includes('isAnalysisMode = false'));
+  assert.ok(board2dSrc.includes('id="btn-2d-analysis"'));
+  assert.ok(panelSrc.includes('id="analysis-fen-input"'));
+  assert.ok(panelSrc.includes('id="btn-analysis-upload-image"'));
+  assert.ok(panelSrc.includes('id="btn-analysis-track-both"'));
+  assert.ok(appSrc.includes('id="btn-analysis-mode"'));
+  assert.ok(appSrc.includes('if (!analysisModeRef.current) {'));
+  assert.ok(appSrc.includes('!analysisModeRef.current'));
+  assert.ok(appSrc.includes('isSideTrackedForHint('));
+
+  // Server Gemini 4 Flash multimodal endpoint
+  assert.ok(serverSrc.includes("app.post('/api/gemini/board-from-image'"));
+  assert.ok(serverSrc.includes("model: 'gemini-4-hydrogen'"));
+  assert.ok(serverSrc.includes('thinkingLevel: ThinkingLevel.LOW'));
+  assert.ok(serverSrc.includes('type: Type.OBJECT'));
+  assert.ok(serverSrc.includes('validateAndNormalizeFen(rawFen'));
+
+  // Client geminiService.extractFenFromBoardImage
+  const { geminiService } = await import('../src/services/geminiService.ts');
+  const okResult = await geminiService.extractFenFromBoardImage(
+    { imageBase64: 'ZmFrZQ==', mimeType: 'image/png', turnHint: 'auto', perspectiveHint: 'auto' },
+    async () =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          configured: true,
+          fen: '4k3/8/8/8/8/8/4Q3/4K3 w - - 0 1',
+          turn: 'w',
+          perspective: 'w',
+          confidence: 'high',
+          notes: 'Pozicija prepoznata.',
+        }),
+        { status: 200 }
+      )
+  );
+  assert.equal(okResult.ok, true);
+  assert.equal(okResult.fen, '4k3/8/8/8/8/8/4Q3/4K3 w - - 0 1');
+  assert.equal(okResult.confidence, 'high');
+
+  const errResult = await geminiService.extractFenFromBoardImage(
+    { imageBase64: 'ZmFrZQ==', mimeType: 'image/jpeg' },
+    async () =>
+      new Response(
+        JSON.stringify({ ok: false, error: 'Slika nije jasna.' }),
+        { status: 422 }
+      )
+  );
+  assert.equal(errResult.ok, false);
+  assert.equal(errResult.error, 'Slika nije jasna.');
+});
+
+test('Board Editor builds valid FEN, strips impossible castling rights, and wires auto move recommendation', async () => {
+  const { buildFenFromEditorBoard } = await import('../src/shared/chessRules.ts');
+
+  const emptyGrid = () => Array.from({ length: 8 }, () => Array(8).fill(null));
+
+  // Valid endgame with kings on home squares + white rook on h1 -> K allowed, Q/k/q stripped
+  const g1 = emptyGrid();
+  g1[7][4] = { type: 'king', color: 'w' };
+  g1[7][7] = { type: 'rook', color: 'w' };
+  g1[0][4] = { type: 'king', color: 'b' };
+  g1[4][3] = { type: 'queen', color: 'b' };
+  const res1 = buildFenFromEditorBoard(g1, {
+    turn: 'b',
+    castling: { K: true, Q: true, k: true, q: true },
+  });
+  assert.equal(res1.ok, true);
+  assert.equal(res1.fen, '4k3/8/8/8/3q4/8/8/4K2R b K - 0 1');
+
+  // Invalid setup: missing black king
+  const g2 = emptyGrid();
+  g2[7][4] = { type: 'king', color: 'w' };
+  const res2 = buildFenFromEditorBoard(g2, { turn: 'w' });
+  assert.equal(res2.ok, false);
+
+  // Invalid setup: opponent king already in check
+  const g3 = emptyGrid();
+  g3[7][4] = { type: 'king', color: 'w' };
+  g3[0][4] = { type: 'king', color: 'b' };
+  g3[2][4] = { type: 'rook', color: 'w' };
+  const res3 = buildFenFromEditorBoard(g3, { turn: 'w' });
+  assert.equal(res3.ok, false);
+  assert.equal(res3.opponentInCheck, true);
+
+  // Verify wiring in AnalysisPanel, Classic2DBoard, and App
+  const panelSrc = fs.readFileSync(path.join(ROOT, 'src/components/AnalysisPanel.tsx'), 'utf-8');
+  const board2dSrc = fs.readFileSync(path.join(ROOT, 'src/components/Classic2DBoard.tsx'), 'utf-8');
+  const appSrc = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+
+  assert.ok(panelSrc.includes('id="btn-analysis-edit-board"'));
+  assert.ok(board2dSrc.includes('id="board-editor-panel"'));
+  assert.ok(board2dSrc.includes('id="btn-editor-apply"'));
+  assert.ok(board2dSrc.includes('if (gameOver || currentTurn !== playerColor) return;'));
+  assert.ok(appSrc.includes('handleApplyEditedPosition'));
+  assert.ok(appSrc.includes('handleOpenBoardEditor'));
+  assert.ok(appSrc.includes('isBoardEditorOpen'));
+});
+
+test('HUD reorganization places 2D toggle in brand pill, Online next to Account in #hud-right, and Piece Set dropdown in Podešavanja', () => {
+  const appSrc = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const cssSrc = fs.readFileSync(path.join(ROOT, 'src/styles.css'), 'utf-8');
+
+  // 1. Standalone 2D toggle inside brand-pill in #hud-left (no redundant 3D button in 3D HUD)
+  assert.match(
+    appSrc,
+    /<div className="brand-pill">[\s\S]*?<span className="brand-title">Wizard Chess 3D<\/span>[\s\S]*?id="btn-toggle-2d"[\s\S]*?<\/div>/
+  );
+  assert.ok(!appSrc.includes('id="btn-view-3d"'));
+  // 2. Online paired with Account inside #hud-right
+  assert.match(
+    appSrc,
+    /id="hud-right"[\s\S]*?className="hud-account-online-group"[\s\S]*?id="btn-account"[\s\S]*?id="btn-online-duel"/
+  );
+  // 3. Piece Set dropdown popover with all 7 sets
+  assert.ok(appSrc.includes('id="piece-set-menu"'));
+  for (const setId of ['klasicni', 'wizard', 'ancient', 'dragon', 'medieval', 'vitez', 'srpski']) {
+    assert.ok(appSrc.includes(`id={\`btn-piece-set-\${setId}\`}`) || appSrc.includes(`btn-piece-set-`));
+    assert.ok(appSrc.includes(`${setId}:`), `Piece set metadata must include ${setId}`);
+  }
+  // 4. Clean 3-mode dock-modes capsule and ambience moved to dock-settings
+  assert.match(
+    appSrc,
+    /className="dock-capsule dock-modes"[\s\S]*?id="btn-academy"[\s\S]*?id="btn-analysis-mode"[\s\S]*?id="btn-guided-mode"[\s\S]*?className=\{`dock-capsule dock-game/
+  );
+  assert.match(
+    appSrc,
+    /className="dock-capsule dock-settings"[\s\S]*?id="btn-piece-set"[\s\S]*?id="btn-ai-difficulty"[\s\S]*?id="btn-ambience-toggle"/
+  );
+  assert.ok(cssSrc.includes('.brand-view-btn'));
+  assert.ok(cssSrc.includes('.hud-account-online-group'));
+  assert.ok(cssSrc.includes('.piece-set-popover'));
+});

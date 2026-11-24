@@ -10,6 +10,11 @@ import { OnlineDuelModal } from './components/OnlineDuelModal';
 import { OnlineMatchBar } from './components/OnlineMatchBar';
 import { AccountModal } from './components/AccountModal';
 import { EvalBar } from './components/EvalBar';
+import {
+  AnalysisPanel,
+  type AnalysisImageStatus,
+  type AnalysisTrackedSide,
+} from './components/AnalysisPanel';
 import { PERSONAS, PersonaId, geminiService, MoveEventDetail, type StockfishHintContext } from './services/geminiService';
 import { soundService } from './services/soundService';
 import { progressionService } from './services/progressionService';
@@ -37,11 +42,13 @@ import {
   type GameExportSnapshot
 } from './services/pgnService';
 import {
+  DEFAULT_START_FEN,
   STOCKFISH_DIFFICULTY_ORDER,
   classifyPlayerMoveQuality,
   evalToDisplay,
   getStockfishEloProfile,
   normalizeStockfishDifficulty,
+  validateAndNormalizeFen,
   type StockfishDifficulty,
   type StockfishEval,
 } from './shared/chessRules';
@@ -64,11 +71,29 @@ const AI_DIFFICULTY_ORDER: AIDifficulty[] = STOCKFISH_DIFFICULTY_ORDER;
 const PIECE_SET_NAMES: Record<PieceSetId, string> = {
   wizard: 'Čarobnjački',
   ancient: 'Antički',
-  dragon: 'Zmajevi i vitezovi',
+  dragon: 'Zmajevi',
   medieval: 'Srednji vek',
   vitez: 'Vitez',
   srpski: 'Srpski',
   klasicni: 'Klasični'
+};
+const PIECE_SET_DESCRIPTIONS: Record<PieceSetId, string> = {
+  klasicni: 'Turnirski Staunton • dvobojni 3D',
+  wizard: 'Magijski komplet katedrale',
+  ancient: 'Mermer i bronza antičkih hramova',
+  dragon: 'Zmajevi, krilati konji i štitovi',
+  medieval: 'Klesani kamen i kovano gvožđe',
+  vitez: 'Viteški turnirski set u drvetu',
+  srpski: 'Kraljevska kruna i tradicionalni štit',
+};
+const PIECE_SET_BADGES: Record<PieceSetId, string> = {
+  klasicni: 'Default',
+  wizard: '3D GLB',
+  ancient: '3D',
+  dragon: '3D',
+  medieval: '3D',
+  vitez: '3D GLB',
+  srpski: '3D GLB',
 };
 const AI_DIFFICULTY_NAMES: Record<AIDifficulty, string> = {
   beginner: 'Početnik',
@@ -84,6 +109,47 @@ const AI_DIFFICULTY_DESCRIPTIONS: Record<AIDifficulty, string> = {
   advanced: 'Jaka taktika i pritisak',
   master: 'Ozbiljan majstorski izazov',
 };
+
+async function prepareBoardImageForUpload(file: File | Blob): Promise<{
+  imageBase64: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+}> {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('Učitana slika nije validna ili ne može da se pročita.'));
+      el.src = objectUrl;
+    });
+
+    const maxEdge = 1280;
+    const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+    const width = Math.max(1, Math.round((img.naturalWidth || 1) * scale));
+    const height = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Pregledač ne podržava obradu slike na canvas-u.');
+    }
+    ctx.drawImage(img, 0, 0, width, height);
+
+    const outputMime: 'image/png' | 'image/jpeg' =
+      file.type === 'image/png' && width * height <= 900_000 ? 'image/png' : 'image/jpeg';
+    const dataUrl =
+      outputMime === 'image/png'
+        ? canvas.toDataURL('image/png')
+        : canvas.toDataURL('image/jpeg', 0.91);
+    const commaIdx = dataUrl.indexOf(',');
+    const imageBase64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+    return { imageBase64, mimeType: outputMime };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 export default function App() {
   const initializedRef = useRef(false);
@@ -111,6 +177,8 @@ export default function App() {
     }
   });
   const [isLoadingPieceSet, setIsLoadingPieceSet] = useState(false);
+  const [pieceSetMenuOpen, setPieceSetMenuOpen] = useState(false);
+  const pieceSetMenuRef = useRef<HTMLDivElement | null>(null);
   const [aiDifficulty, setAIDifficulty] = useState<AIDifficulty>(() => {
     try {
       const saved = localStorage.getItem('wizard_chess_ai_difficulty');
@@ -159,6 +227,22 @@ export default function App() {
   customLessonsRef.current = customLessons;
   const [hasPlayedMoves, setHasPlayedMoves] = useState(false);
   const [is2DMode, setIs2DMode] = useState(false);
+  const [isBoardEditorOpen, setIsBoardEditorOpen] = useState(false);
+  const editorReturnTo3DRef = useRef(false);
+  const skipNextResetGuidedHintRef = useRef(false);
+  const [analysisMode, setAnalysisMode] = useState(false);
+  const analysisModeRef = useRef(analysisMode);
+  analysisModeRef.current = analysisMode;
+  const [analysisTrackSide, setAnalysisTrackSide] = useState<AnalysisTrackedSide>('w');
+  const analysisTrackSideRef = useRef<AnalysisTrackedSide>(analysisTrackSide);
+  analysisTrackSideRef.current = analysisTrackSide;
+  const [currentBoardFen, setCurrentBoardFen] = useState<string>(DEFAULT_START_FEN);
+  const [currentBoardTurn, setCurrentBoardTurn] = useState<'w' | 'b'>('w');
+  const [analysisImageStatus, setAnalysisImageStatus] = useState<AnalysisImageStatus>({
+    loading: false,
+    error: null,
+    status: null,
+  });
   const [guidedMode, setGuidedMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem('wizard_chess_guided_mode') === '1';
@@ -191,6 +275,12 @@ export default function App() {
   const isOnlineModeRef = useRef(isOnlineMode);
   isOnlineModeRef.current = isOnlineMode;
   const lastOnlineOpponentAvatarRef = useRef<string | null>(null);
+
+  const isSideTrackedForHint = (turn: 'w' | 'b', pColor: 'w' | 'b') => {
+    if (!analysisModeRef.current) return turn === pColor;
+    if (analysisTrackSideRef.current === 'both') return true;
+    return turn === analysisTrackSideRef.current;
+  };
 
   const applySceneTheme = (themeId: SceneThemeId) => {
     const win = window as Window & {
@@ -267,6 +357,8 @@ export default function App() {
     multiplayerService.setEventHandlers({
       onRoomEntered: (yourColor, state, isRematch) => {
         setAcademyVisible(false);
+        setAnalysisMode(false);
+        analysisModeRef.current = false;
         setPendingPromotion(null);
         aiRequestSeqRef.current += 1;
         guidedReqSeqRef.current += 1;
@@ -422,9 +514,7 @@ export default function App() {
     return () => window.removeEventListener('wizardchess:cameraview', handleCameraViewChange);
   }, []);
 
-  const handleTogglePieceSet = () => {
-    const currentIndex = PIECE_SET_ORDER.indexOf(selectedPieceSet);
-    const nextPieceSet = PIECE_SET_ORDER[(currentIndex + 1) % PIECE_SET_ORDER.length];
+  const handleSelectPieceSet = (nextPieceSet: PieceSetId) => {
     const pieceSetWindow = window as Window & { wizardChess?: { setPieceSet?: (id: PieceSetId) => boolean } };
     if (!pieceSetWindow.wizardChess?.setPieceSet?.(nextPieceSet)) {
       console.warn(`Could not switch chess piece set to ${nextPieceSet}.`);
@@ -436,8 +526,29 @@ export default function App() {
     } catch (error) {
       console.warn('Chess piece set preference could not be saved.', error);
     }
+    setPieceSetMenuOpen(false);
     setMobileSheetOpen(false);
   };
+
+  useEffect(() => {
+    if (!pieceSetMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (pieceSetMenuRef.current && !pieceSetMenuRef.current.contains(event.target as Node)) {
+        setPieceSetMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPieceSetMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [pieceSetMenuOpen]);
 
   useEffect(() => {
     if (!difficultyMenuOpen) return;
@@ -501,6 +612,13 @@ export default function App() {
     };
     win.wizardChess?.set2DModeActive?.(is2DMode);
   }, [is2DMode]);
+
+  useEffect(() => {
+    if (isOnlineMode) {
+      setIsBoardEditorOpen(false);
+      editorReturnTo3DRef.current = false;
+    }
+  }, [isOnlineMode]);
 
   useEffect(() => {
     const win = window as Window & {
@@ -630,7 +748,18 @@ export default function App() {
       const detail = customEvt.detail;
       setHasPlayedMoves(true);
       setPlayerColor(detail.playerColor);
+      if (detail.fen) {
+        setCurrentBoardFen(detail.fen);
+      }
+      setCurrentBoardTurn(detail.currentTurn);
       const isPlayerMove = detail.move ? detail.move.color === detail.playerColor : false;
+      const isTrackedMove = analysisModeRef.current
+        ? Boolean(
+            detail.move &&
+              (analysisTrackSideRef.current === 'both' ||
+                detail.move.color === analysisTrackSideRef.current)
+          )
+        : isPlayerMove;
       const isCheckmate = Boolean(
         detail.isCheckmate ?? (detail.gameOver && detail.inCheck && !detail.drawReason)
       );
@@ -647,19 +776,21 @@ export default function App() {
         soundService.playMove();
       }
 
-      // Award XP only for player moves; track opponent captures/checkmate separately
-      if (isPlayerMove) {
-        progressionService.awardMove(
-          Boolean(detail.move?.capture),
-          detail.inCheck,
-          isCheckmate,
-          isDraw
-        );
-      } else {
-        progressionService.recordOpponentMove(Boolean(detail.move?.capture), isCheckmate);
+      // Award XP only for player moves in real games (never in free Analysis sandbox)
+      if (!analysisModeRef.current) {
+        if (isPlayerMove) {
+          progressionService.awardMove(
+            Boolean(detail.move?.capture),
+            detail.inCheck,
+            isCheckmate,
+            isDraw
+          );
+        } else {
+          progressionService.recordOpponentMove(Boolean(detail.move?.capture), isCheckmate);
+        }
       }
 
-      if (detail.gameOver && !isOnlineModeRef.current) {
+      if (detail.gameOver && !isOnlineModeRef.current && !analysisModeRef.current) {
         const matchResult = isCheckmate ? (isPlayerMove ? 'win' : 'loss') : 'draw';
         const aiPersona = PERSONAS[selectedPersonaRef.current];
         const reason = isCheckmate ? 'checkmate' : detail.drawReason || 'stalemate';
@@ -715,11 +846,15 @@ export default function App() {
                 setEvalState(nextEval);
                 enrichedDetail.evalLabel = evalToDisplay(nextEval).label;
 
-                if (isPlayerMove) {
+                if (isTrackedMove) {
+                  const qualityRefSide =
+                    analysisModeRef.current && detail.move
+                      ? detail.move.color
+                      : detail.playerColor;
                   const { quality, cpLoss } = classifyPlayerMoveQuality(
                     prevEval,
                     nextEval,
-                    detail.playerColor
+                    qualityRefSide
                   );
                   enrichedDetail.moveQuality = quality;
                   enrichedDetail.cpLoss = cpLoss;
@@ -741,7 +876,7 @@ export default function App() {
           !isOnlineModeRef.current &&
           !academyVisibleRef.current &&
           guidedModeRef.current &&
-          detail.currentTurn === detail.playerColor
+          isSideTrackedForHint(detail.currentTurn, detail.playerColor)
         ) {
           if (reqId === aiRequestSeqRef.current) {
             void runMoveHint({
@@ -753,12 +888,15 @@ export default function App() {
           return;
         }
 
-        const shouldCommentWithAI =
-          isOnlineModeRef.current ||
-          !isPlayerMove ||
-          detail.gameOver ||
-          detail.inCheck ||
-          enrichedDetail.moveQuality === 'blunder';
+        const shouldCommentWithAI = analysisModeRef.current
+          ? detail.gameOver ||
+            detail.inCheck ||
+            (isTrackedMove && enrichedDetail.moveQuality === 'blunder')
+          : isOnlineModeRef.current ||
+            !isPlayerMove ||
+            detail.gameOver ||
+            detail.inCheck ||
+            enrichedDetail.moveQuality === 'blunder';
 
         if (!shouldCommentWithAI || reqId !== aiRequestSeqRef.current) {
           if (reqId === aiRequestSeqRef.current) {
@@ -783,7 +921,14 @@ export default function App() {
     };
 
     const handleResetEvent = (e: Event) => {
-      const detail = (e as CustomEvent<{ playerColor?: 'w' | 'b' }>).detail;
+      const detail = (
+        e as CustomEvent<{
+          playerColor?: 'w' | 'b';
+          fen?: string;
+          currentTurn?: 'w' | 'b';
+          customFen?: boolean;
+        }>
+      ).detail;
       setHasPlayedMoves(false);
       aiRequestSeqRef.current += 1;
       guidedReqSeqRef.current += 1;
@@ -791,10 +936,36 @@ export default function App() {
       setIsLoadingAI(false);
       setIsEvaluating(false);
       setPendingPromotion(null);
+      if (detail?.fen) {
+        setCurrentBoardFen(detail.fen);
+      } else {
+        setCurrentBoardFen(DEFAULT_START_FEN);
+      }
+      const turnNow = detail?.currentTurn === 'b' ? 'b' : 'w';
+      setCurrentBoardTurn(turnNow);
+
       evalBeforeRef.current = { whiteCp: 0, mateIn: null };
       if (!isOnlineModeRef.current && !academyVisibleRef.current) {
         stockfishService.newGame();
-        setEvalState({ whiteCp: 0, mateIn: null });
+        if (detail?.customFen && detail?.fen) {
+          const evalSeq = ++evalReqSeqRef.current;
+          setIsEvaluating(true);
+          void stockfishService
+            .evaluatePosition(detail.fen, 140)
+            .then((evalRes) => {
+              if (evalSeq === evalReqSeqRef.current && evalRes) {
+                evalBeforeRef.current = evalRes;
+                setEvalState(evalRes);
+              }
+            })
+            .finally(() => {
+              if (evalSeq === evalReqSeqRef.current) {
+                setIsEvaluating(false);
+              }
+            });
+        } else {
+          setEvalState({ whiteCp: 0, mateIn: null });
+        }
       }
       const nextColor = detail?.playerColor === 'b' ? 'b' : 'w';
       if (detail?.playerColor === 'w' || detail?.playerColor === 'b') {
@@ -802,10 +973,19 @@ export default function App() {
       }
       const p = PERSONAS[selectedPersonaRef.current];
       setAiVoiceCue(undefined);
-      setAiMessage(`Nova partija je započeta na oltaru! ${p.name} je spreman za tvoj potez.`);
+      if (detail?.customFen) {
+        setAiMessage(
+          `Pozicija učitana na tablu (${turnNow === 'w' ? 'Beli' : 'Crni'} na potezu).`
+        );
+      } else {
+        setAiMessage(`Nova partija je započeta na oltaru! ${p.name} je spreman za tvoj potez.`);
+      }
+      const shouldSkipGuidedHint = skipNextResetGuidedHintRef.current;
+      skipNextResetGuidedHintRef.current = false;
       if (
+        !shouldSkipGuidedHint &&
         guidedModeRef.current &&
-        nextColor === 'w' &&
+        isSideTrackedForHint(turnNow, nextColor) &&
         !isOnlineModeRef.current &&
         !academyVisibleRef.current
       ) {
@@ -816,8 +996,25 @@ export default function App() {
     };
 
     const handleUndoSyncEvent = (e: Event) => {
-      const detail = (e as CustomEvent<{ remainingMoves?: number }>).detail;
+      const detail = (
+        e as CustomEvent<{
+          remainingMoves?: number;
+          fen?: string;
+          currentTurn?: 'w' | 'b';
+        }>
+      ).detail;
       setHasPlayedMoves(Boolean(detail?.remainingMoves && detail.remainingMoves > 0));
+      if (detail?.fen) setCurrentBoardFen(detail.fen);
+      if (detail?.currentTurn === 'w' || detail?.currentTurn === 'b') {
+        setCurrentBoardTurn(detail.currentTurn);
+      }
+    };
+
+    const handleSideChangedEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ playerColor?: 'w' | 'b' }>).detail;
+      if (detail?.playerColor === 'w' || detail?.playerColor === 'b') {
+        setPlayerColor(detail.playerColor);
+      }
     };
 
     const handleOnlineSyncEvent = () => {
@@ -831,12 +1028,14 @@ export default function App() {
     window.addEventListener('wizardchess:move', handleMoveEvent);
     window.addEventListener('wizardchess:reset', handleResetEvent);
     window.addEventListener('wizardchess:undo', handleUndoSyncEvent);
+    window.addEventListener('wizardchess:side-changed', handleSideChangedEvent);
     window.addEventListener('wizardchess:online-sync', handleOnlineSyncEvent);
 
     return () => {
       window.removeEventListener('wizardchess:move', handleMoveEvent);
       window.removeEventListener('wizardchess:reset', handleResetEvent);
       window.removeEventListener('wizardchess:undo', handleUndoSyncEvent);
+      window.removeEventListener('wizardchess:side-changed', handleSideChangedEvent);
       window.removeEventListener('wizardchess:online-sync', handleOnlineSyncEvent);
     };
   }, []);
@@ -1366,22 +1565,28 @@ export default function App() {
           setAccountModalOpen(false);
         } else if (onlineModalOpen) {
           setOnlineModalOpen(false);
+        } else if (isBoardEditorOpen) {
+          setIsBoardEditorOpen(false);
+          if (editorReturnTo3DRef.current) {
+            setIs2DMode(false);
+          }
+          editorReturnTo3DRef.current = false;
         } else if (is2DMode) {
           setIs2DMode(false);
         } else {
           setMobileSheetOpen(false);
         }
       } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
-        if (!academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isOnlineModeRef.current && !isTypingTarget(e.target)) {
+        if (!academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isOnlineModeRef.current && !isBoardEditorOpen && !isTypingTarget(e.target)) {
           e.preventDefault();
           handleUndoMove();
         }
       } else if (e.key === 'u' || e.key === 'U') {
-        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isOnlineModeRef.current && !isTypingTarget(e.target)) {
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isOnlineModeRef.current && !isBoardEditorOpen && !isTypingTarget(e.target)) {
           handleUndoMove();
         }
       } else if (e.key === '2') {
-        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isTypingTarget(e.target)) {
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isBoardEditorOpen && !isTypingTarget(e.target)) {
           setIs2DMode((prev) => !prev);
         }
       }
@@ -1397,7 +1602,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleResize);
     };
-  }, [academyVisible, is2DMode, pendingPromotion, onlineModalOpen, accountModalOpen]);
+  }, [academyVisible, is2DMode, isBoardEditorOpen, pendingPromotion, onlineModalOpen, accountModalOpen]);
 
   const handleOpenOnlineModal = (tab: 'create' | 'join' = 'create') => {
     multiplayerService.clearError();
@@ -1479,11 +1684,14 @@ export default function App() {
     };
 
     const ctx = win.wizardChess?.getGameContext?.();
-    if (isGuided && (!ctx || ctx.gameOver || ctx.currentTurn !== ctx.playerColor)) {
+    if (
+      isGuided &&
+      (!ctx || ctx.gameOver || !isSideTrackedForHint(ctx.currentTurn, ctx.playerColor || 'w'))
+    ) {
       return;
     }
 
-    if (options?.awardXp) {
+    if (options?.awardXp && !analysisModeRef.current) {
       progressionService.awardHint();
     }
 
@@ -1507,7 +1715,12 @@ export default function App() {
       if (isGuided && !guidedModeRef.current) return;
 
       const latestCtx = win.wizardChess?.getGameContext?.();
-      if (isGuided && (!latestCtx || latestCtx.gameOver || latestCtx.currentTurn !== latestCtx.playerColor)) {
+      if (
+        isGuided &&
+        (!latestCtx ||
+          latestCtx.gameOver ||
+          !isSideTrackedForHint(latestCtx.currentTurn, latestCtx.playerColor || 'w'))
+      ) {
         return;
       }
 
@@ -1599,6 +1812,269 @@ export default function App() {
     }
   };
 
+  const handleToggleAnalysisMode = () => {
+    if (isOnlineModeRef.current || academyVisibleRef.current) return;
+    const next = !analysisModeRef.current;
+    const win = window as Window & {
+      wizardChess?: {
+        setAnalysisMode?: (enabled: boolean) => boolean;
+        getFen?: () => string;
+        getCurrentTurn?: () => 'w' | 'b';
+        getPlayerColor?: () => 'w' | 'b';
+        clearHintHighlight?: () => void;
+      };
+    };
+    const applied = win.wizardChess?.setAnalysisMode?.(next);
+    if (applied === false && next) return;
+
+    analysisModeRef.current = next;
+    setAnalysisMode(next);
+    setAnalysisImageStatus({ loading: false, error: null, status: null });
+
+    const liveFen = win.wizardChess?.getFen?.() || currentBoardFen;
+    const liveTurn = win.wizardChess?.getCurrentTurn?.() || currentBoardTurn;
+    const livePlayerColor = win.wizardChess?.getPlayerColor?.() || playerColor;
+    setCurrentBoardFen(liveFen);
+    setCurrentBoardTurn(liveTurn);
+
+    if (next) {
+      setAiVoiceCue(undefined);
+      setAiMessage(
+        '🔬 Režim Analize: igraj poteze za obe strane, prati savete za izabranu boju, učitaj FEN ili sliku pozicije.'
+      );
+      if (guidedModeRef.current && isSideTrackedForHint(liveTurn, livePlayerColor)) {
+        void runMoveHint({ isGuided: true, awardXp: false });
+      }
+    } else {
+      setIsBoardEditorOpen(false);
+      editorReturnTo3DRef.current = false;
+      win.wizardChess?.clearHintHighlight?.();
+      setAiVoiceCue(undefined);
+      setAiMessage(
+        `AI duel je ponovo aktivan (${PERSONAS[selectedPersonaRef.current].name}).`
+      );
+    }
+  };
+
+  const handleChangeTrackedSide = (side: AnalysisTrackedSide) => {
+    analysisTrackSideRef.current = side;
+    setAnalysisTrackSide(side);
+    const win = window as Window & {
+      wizardChess?: {
+        getCurrentTurn?: () => 'w' | 'b';
+        getPlayerColor?: () => 'w' | 'b';
+        clearHintHighlight?: () => void;
+      };
+    };
+    const turnNow = win.wizardChess?.getCurrentTurn?.() || currentBoardTurn;
+    const pCol = win.wizardChess?.getPlayerColor?.() || playerColor;
+    if (guidedModeRef.current) {
+      if (isSideTrackedForHint(turnNow, pCol)) {
+        void runMoveHint({ isGuided: true, awardXp: false });
+      } else {
+        guidedReqSeqRef.current += 1;
+        win.wizardChess?.clearHintHighlight?.();
+      }
+    }
+  };
+
+  const handleLoadFenPosition = (fenInput: string): { ok: boolean; error?: string } => {
+    if (isOnlineModeRef.current || academyVisibleRef.current) {
+      return { ok: false, error: 'FEN nije dostupan dok je aktivan online duel ili Akademija.' };
+    }
+    const validation = validateAndNormalizeFen(fenInput);
+    if (!validation.ok || !validation.fen) {
+      return { ok: false, error: validation.error || 'Neispravan FEN zapis.' };
+    }
+
+    const win = window as Window & {
+      wizardChess?: {
+        loadCustomFenPosition?: (fen: string) => boolean;
+      };
+    };
+    const loaded = win.wizardChess?.loadCustomFenPosition?.(validation.fen);
+    if (!loaded) {
+      return { ok: false, error: 'Pozicija nije mogla da se učita na tablu.' };
+    }
+    setCurrentBoardFen(validation.fen);
+    setCurrentBoardTurn(validation.state?.currentTurn || 'w');
+    setAnalysisImageStatus((prev) => ({ ...prev, error: null }));
+    return { ok: true };
+  };
+
+  const handleOpenBoardEditor = () => {
+    if (isOnlineModeRef.current || academyVisibleRef.current) return;
+    if (!analysisModeRef.current) {
+      const win = window as Window & {
+        wizardChess?: { setAnalysisMode?: (enabled: boolean) => boolean };
+      };
+      const applied = win.wizardChess?.setAnalysisMode?.(true);
+      if (applied !== false) {
+        analysisModeRef.current = true;
+        setAnalysisMode(true);
+      }
+    }
+    editorReturnTo3DRef.current = !is2DMode;
+    setIsBoardEditorOpen(true);
+    setIs2DMode(true);
+    setMobileSheetOpen(false);
+  };
+
+  const handleCancelBoardEditor = () => {
+    setIsBoardEditorOpen(false);
+    if (editorReturnTo3DRef.current) {
+      setIs2DMode(false);
+    }
+    editorReturnTo3DRef.current = false;
+  };
+
+  const handleApplyEditedPosition = (fen: string): { ok: boolean; error?: string } => {
+    skipNextResetGuidedHintRef.current = true;
+    const res = handleLoadFenPosition(fen);
+    if (!res.ok) {
+      skipNextResetGuidedHintRef.current = false;
+      return res;
+    }
+
+    const parsed = validateAndNormalizeFen(fen);
+    const turnNow: 'w' | 'b' = parsed.state?.currentTurn === 'b' ? 'b' : 'w';
+    const shouldReturnTo3D = editorReturnTo3DRef.current;
+    editorReturnTo3DRef.current = false;
+    setIsBoardEditorOpen(false);
+    if (shouldReturnTo3D) {
+      setIs2DMode(false);
+    }
+
+    const shouldRunAsGuided =
+      guidedModeRef.current && isSideTrackedForHint(turnNow, playerColor);
+    window.setTimeout(() => {
+      void runMoveHint({
+        isGuided: shouldRunAsGuided,
+        awardXp: false,
+      });
+    }, 90);
+
+    return { ok: true };
+  };
+
+  const handleToggleBoardTurn = () => {
+    const win = window as Window & {
+      wizardChess?: { getFen?: () => string };
+    };
+    const fenNow = win.wizardChess?.getFen?.() || currentBoardFen;
+    const nextTurn: 'w' | 'b' = currentBoardTurn === 'w' ? 'b' : 'w';
+    const check = validateAndNormalizeFen(fenNow, nextTurn);
+    if (!check.ok || !check.fen) {
+      setAnalysisImageStatus({
+        loading: false,
+        error: check.error || 'Nije moguće promeniti potez u ovoj poziciji.',
+        status: null,
+      });
+      return;
+    }
+    const loaded = handleLoadFenPosition(check.fen);
+    if (!loaded.ok) {
+      setAnalysisImageStatus({
+        loading: false,
+        error: loaded.error || 'Promena poteza nije uspela.',
+        status: null,
+      });
+    }
+  };
+
+  const handleUploadBoardImage = async (
+    file: File | Blob,
+    options: { turnHint: 'auto' | 'w' | 'b'; perspectiveHint: 'auto' | 'w' | 'b' }
+  ) => {
+    if (isOnlineModeRef.current || academyVisibleRef.current) return;
+    setAnalysisImageStatus({ loading: true, error: null, status: null });
+
+    try {
+      const prepared = await prepareBoardImageForUpload(file);
+      const res = await geminiService.extractFenFromBoardImage({
+        imageBase64: prepared.imageBase64,
+        mimeType: prepared.mimeType,
+        turnHint: options.turnHint,
+        perspectiveHint: options.perspectiveHint,
+      });
+
+      if (!res.ok || !res.fen) {
+        setAnalysisImageStatus({
+          loading: false,
+          error:
+            res.error ||
+            'AI nije uspeo da pročita poziciju sa slike. Pokušaj sa jasnijim isečkom table.',
+          status: null,
+        });
+        return;
+      }
+
+      const applied = handleLoadFenPosition(res.fen);
+      if (!applied.ok) {
+        setAnalysisImageStatus({
+          loading: false,
+          error: applied.error || 'Prepoznata pozicija nije mogla da se učita.',
+          status: null,
+        });
+        return;
+      }
+
+      const perspectiveNote =
+        res.perspective === 'b' ? 'Detektovan pogled crnog (okrenuta tabla).' : 'Detektovan pogled belog.';
+      const statusText = res.notes ? `${res.notes} (${perspectiveNote})` : perspectiveNote;
+      setAnalysisImageStatus({
+        loading: false,
+        error: null,
+        status: statusText,
+        confidence: res.confidence,
+      });
+    } catch (err) {
+      setAnalysisImageStatus({
+        loading: false,
+        error:
+          err instanceof Error && err.message
+            ? err.message
+            : 'Greška prilikom učitavanja slike table.',
+        status: null,
+      });
+    }
+  };
+
+  const handleUploadBoardImageRef = useRef(handleUploadBoardImage);
+  handleUploadBoardImageRef.current = handleUploadBoardImage;
+
+  useEffect(() => {
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      if (
+        !analysisModeRef.current ||
+        isOnlineModeRef.current ||
+        academyVisibleRef.current ||
+        onlineModalOpen ||
+        accountModalOpen
+      ) {
+        return;
+      }
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type && item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          if (blob) {
+            e.preventDefault();
+            void handleUploadBoardImageRef.current(blob, {
+              turnHint: 'auto',
+              perspectiveHint: 'auto',
+            });
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
+  }, [onlineModalOpen, accountModalOpen]);
+
   const handleExportPgn = () => {
     const win = window as Window & {
       wizardChess?: {
@@ -1621,6 +2097,10 @@ export default function App() {
       whiteName = onlineSession.roomState.players.w?.displayName || 'Beli';
       blackName = onlineSession.roomState.players.b?.displayName || 'Crni';
       eventName = `Wizard Chess Online Duel (${onlineSession.roomId || 'online'})`;
+    } else if (analysisModeRef.current) {
+      whiteName = 'Beli (Analiza)';
+      blackName = 'Crni (Analiza)';
+      eventName = 'Wizard Chess Analiza Pozicije';
     } else {
       const aiName = `${personaName} (AI)`;
       if (history.playerColor === 'b') {
@@ -1650,7 +2130,7 @@ export default function App() {
   return (
     <>
       <div id="loading-overlay">
-        <div className="loader-title">Wizard Chess</div>
+        <div className="loader-title">Wizard Chess 3D</div>
         <div className="loader-bar-wrap">
           <div className="loader-bar" id="loader-bar"></div>
         </div>
@@ -1681,6 +2161,23 @@ export default function App() {
         onRequestHint={handleRequestHint}
       />
 
+      {analysisMode && !isOnlineMode && !academyVisible && !is2DMode && (
+        <AnalysisPanel
+          variant="floating"
+          currentFen={currentBoardFen}
+          currentTurn={currentBoardTurn}
+          trackedSide={analysisTrackSide}
+          imageStatus={analysisImageStatus}
+          isBoardEditorOpen={isBoardEditorOpen}
+          onChangeTrackedSide={handleChangeTrackedSide}
+          onLoadFen={handleLoadFenPosition}
+          onToggleBoardTurn={handleToggleBoardTurn}
+          onUploadBoardImage={handleUploadBoardImage}
+          onOpenBoardEditor={handleOpenBoardEditor}
+          onCloseAnalysis={handleToggleAnalysisMode}
+        />
+      )}
+
       <button
         type="button"
         className="hud-btn restore-ui-button"
@@ -1695,7 +2192,20 @@ export default function App() {
       <div id="hud-top">
         <div className="hud-group" id="hud-left">
           <div className="brand-pill">
-            <span className="brand-title">Wizard Chess</span>
+            <span className="brand-title">Wizard Chess 3D</span>
+            <button
+              type="button"
+              id="btn-toggle-2d"
+              className={`brand-view-btn btn-toggle-2d ${is2DMode ? 'active' : ''}`}
+              aria-pressed={is2DMode}
+              title="Prebaci u klasičnu 2D tablu (Prečica: 2)"
+              onClick={() => {
+                setIs2DMode((prev) => !prev);
+                setMobileSheetOpen(false);
+              }}
+            >
+              ⬚ 2D
+            </button>
           </div>
 
           <div className="status-pill" id="status-pill">
@@ -1703,19 +2213,32 @@ export default function App() {
             <span id="turn-text">Beli na potezu</span>
             <span className="mode-badge" id="mode-badge">Igraš kao beli</span>
           </div>
+        </div>
 
+        <div className="hud-group" id="hud-right">
           {/* Gamified RPG Player Level Bar */}
           <PlayerLevelBar />
 
-          <button
-            type="button"
-            id="btn-account"
-            className={`hud-btn account-hud-btn ${authSnap.user ? 'logged-in' : ''}`}
-            onClick={() => setAccountModalOpen(true)}
-            title="Profil igrača, prijava i istorija partija"
-          >
-            {authSnap.user ? `👤 ${authSnap.user.displayName}` : '👤 Prijava / Gost'}
-          </button>
+          <div className="hud-account-online-group">
+            <button
+              type="button"
+              id="btn-account"
+              className={`hud-btn account-hud-btn ${authSnap.user ? 'logged-in' : ''}`}
+              onClick={() => setAccountModalOpen(true)}
+              title="Profil igrača, prijava i istorija partija"
+            >
+              {authSnap.user ? `👤 ${authSnap.user.displayName}` : '👤 Prijava / Gost'}
+            </button>
+            <button
+              type="button"
+              className={`hud-btn online-hud-btn ${isOnlineMode ? 'active' : ''}`}
+              id="btn-online-duel"
+              title="Igraj online partiju protiv prijatelja"
+              onClick={() => handleOpenOnlineModal('create')}
+            >
+              ⚔ {isOnlineMode ? `Online (${onlineSession.roomId})` : 'Online'}
+            </button>
+          </div>
 
           {/* Desktop AI Persona Selector */}
           {!isOnlineMode && (
@@ -1810,40 +2333,17 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={`hud-btn ${isOnlineMode ? 'active' : ''}`}
-            id="btn-online-duel"
-            title="Igraj online partiju protiv prijatelja"
-            onClick={() => handleOpenOnlineModal('create')}
-          >
-            ⚔ {isOnlineMode ? `Online (${onlineSession.roomId})` : 'Online'}
-          </button>
-          <button
-            type="button"
-            className={`hud-btn btn-toggle-2d ${is2DMode ? 'active' : ''}`}
-            id="btn-toggle-2d"
-            title="Prebaci u klasičnu 2D tablu (Prečica: 2)"
+            className={`hud-btn ${analysisMode ? 'analysis-active' : ''} ${isOnlineMode ? 'online-hidden' : ''}`}
+            id="btn-analysis-mode"
+            aria-pressed={analysisMode}
+            disabled={isOnlineMode}
+            title="Slobodna tabla za analizu: vuci poteze za obe strane, učitaj FEN ili sliku pozicije"
             onClick={() => {
-              setIs2DMode((prev) => !prev);
+              handleToggleAnalysisMode();
               setMobileSheetOpen(false);
             }}
           >
-            {is2DMode ? '🏰 3D' : '⬚ 2D'}
-          </button>
-          <button
-            type="button"
-            className={`hud-btn ${ambience === 'park' ? 'park-active' : ''}`}
-            id="btn-ambience-toggle"
-            title={
-              ambience === 'park'
-                ? 'Prebaci na mračnu katedralu sa 3D protivnikom i glasom'
-                : 'Prebaci u Sunčani Central Park (Zen režim bez avatara i govora)'
-            }
-            onClick={() => {
-              setAmbience((prev) => (prev === 'park' ? 'cathedral' : 'park'));
-              setMobileSheetOpen(false);
-            }}
-          >
-            {ambience === 'park' ? '🏛️ Katedrala (Duel)' : '🌳 Park (Čista 3D tabla)'}
+            🔬 Analiza
           </button>
           <button
             type="button"
@@ -1906,17 +2406,64 @@ export default function App() {
         {/* ── Capsule 3: Podešavanja ── */}
         <div className="dock-capsule dock-settings">
           <span className="dock-capsule-label">Podešavanja</span>
-          <button
-            type="button"
-            className="hud-btn"
-            id="btn-piece-set"
-            title="Promeni izgled šahovskih figura"
-            aria-label={`Promeni set figura. Trenutni set: ${PIECE_SET_NAMES[selectedPieceSet]}`}
-            onClick={handleTogglePieceSet}
-            disabled={isLoadingPieceSet}
+          <div
+            ref={pieceSetMenuRef}
+            className={`difficulty-picker-wrap pieceset-picker-wrap ${pieceSetMenuOpen ? 'open' : ''}`}
           >
-            {isLoadingPieceSet ? `⏳ ${PIECE_SET_NAMES[selectedPieceSet]}...` : `♟ ${PIECE_SET_NAMES[selectedPieceSet]}`}
-          </button>
+            <button
+              type="button"
+              className={`hud-btn ${pieceSetMenuOpen ? 'active' : ''}`}
+              id="btn-piece-set"
+              title="Izaberi set šahovskih figura"
+              aria-haspopup="listbox"
+              aria-expanded={pieceSetMenuOpen}
+              aria-label={`Izaberi set figura. Trenutni set: ${PIECE_SET_NAMES[selectedPieceSet]}`}
+              onClick={() => {
+                setDifficultyMenuOpen(false);
+                setPieceSetMenuOpen((prev) => !prev);
+              }}
+              disabled={isLoadingPieceSet}
+            >
+              {isLoadingPieceSet
+                ? `⏳ ${PIECE_SET_NAMES[selectedPieceSet]}...`
+                : `♟ ${PIECE_SET_NAMES[selectedPieceSet]} ▾`}
+            </button>
+            {pieceSetMenuOpen && (
+              <div
+                id="piece-set-menu"
+                className="ai-difficulty-popover piece-set-popover"
+                role="listbox"
+                aria-label="Izbor seta figura"
+              >
+                <div className="ai-difficulty-popover-header">Set figura</div>
+                {PIECE_SET_ORDER.map((setId) => {
+                  const selected = selectedPieceSet === setId;
+                  return (
+                    <button
+                      key={setId}
+                      type="button"
+                      id={`btn-piece-set-${setId}`}
+                      role="option"
+                      aria-selected={selected}
+                      className={`ai-difficulty-option ${selected ? 'active' : ''}`}
+                      onClick={() => handleSelectPieceSet(setId)}
+                    >
+                      <span className="ai-difficulty-option-top">
+                        <span className="ai-difficulty-option-name">
+                          {selected ? '✓ ' : ''}
+                          {PIECE_SET_NAMES[setId]}
+                        </span>
+                        <span className="ai-difficulty-option-elo">{PIECE_SET_BADGES[setId]}</span>
+                      </span>
+                      <span className="ai-difficulty-option-desc">
+                        {PIECE_SET_DESCRIPTIONS[setId]}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <div
             ref={difficultyMenuRef}
             className={`difficulty-picker-wrap ${difficultyMenuOpen ? 'open' : ''} ${isOnlineMode ? 'online-hidden' : ''}`}
@@ -1930,7 +2477,10 @@ export default function App() {
               aria-haspopup="listbox"
               aria-expanded={difficultyMenuOpen}
               aria-label={`Izaberi težinu AI protivnika. Trenutna težina: ${AI_DIFFICULTY_NAMES[aiDifficulty]}`}
-              onClick={() => setDifficultyMenuOpen((prev) => !prev)}
+              onClick={() => {
+                setPieceSetMenuOpen(false);
+                setDifficultyMenuOpen((prev) => !prev);
+              }}
             >
               ⚔ {AI_DIFFICULTY_NAMES[aiDifficulty]} ▾
             </button>
@@ -1971,6 +2521,22 @@ export default function App() {
               </div>
             )}
           </div>
+          <button
+            type="button"
+            className={`hud-btn ${ambience === 'park' ? 'park-active' : ''}`}
+            id="btn-ambience-toggle"
+            title={
+              ambience === 'park'
+                ? 'Prebaci na mračnu katedralu sa 3D protivnikom i glasom'
+                : 'Prebaci u Sunčani Central Park (Zen režim bez avatara i govora)'
+            }
+            onClick={() => {
+              setAmbience((prev) => (prev === 'park' ? 'cathedral' : 'park'));
+              setMobileSheetOpen(false);
+            }}
+          >
+            {ambience === 'park' ? '🏛️ Katedrala (Duel)' : '🌳 Park (Čista 3D tabla)'}
+          </button>
           <button
             className={`hud-btn ${isOnlineMode ? 'online-hidden' : ''}`}
             id="btn-side-toggle"
@@ -2094,14 +2660,41 @@ export default function App() {
       <Classic2DBoard
         isOpen={is2DMode}
         isOnlineMode={isOnlineMode}
+        isAnalysisMode={analysisMode}
+        isEditorMode={isBoardEditorOpen}
         evalState={evalState}
         isEvaluating={isEvaluating}
         hintMessage={aiMessage}
         isLoadingHint={isLoadingAI}
         guidedMode={guidedMode}
+        analysisSlot={
+          analysisMode && !isOnlineMode ? (
+            <AnalysisPanel
+              variant="embedded"
+              currentFen={currentBoardFen}
+              currentTurn={currentBoardTurn}
+              trackedSide={analysisTrackSide}
+              imageStatus={analysisImageStatus}
+              isBoardEditorOpen={isBoardEditorOpen}
+              onChangeTrackedSide={handleChangeTrackedSide}
+              onLoadFen={handleLoadFenPosition}
+              onToggleBoardTurn={handleToggleBoardTurn}
+              onUploadBoardImage={handleUploadBoardImage}
+              onOpenBoardEditor={handleOpenBoardEditor}
+            />
+          ) : null
+        }
         onRequestHint={handleRequestHint}
         onToggleGuidedMode={handleToggleGuidedMode}
-        onClose={() => setIs2DMode(false)}
+        onToggleAnalysisMode={handleToggleAnalysisMode}
+        onOpenEditor={handleOpenBoardEditor}
+        onCancelEditor={handleCancelBoardEditor}
+        onApplyEditedPosition={handleApplyEditedPosition}
+        onClose={() => {
+          setIsBoardEditorOpen(false);
+          editorReturnTo3DRef.current = false;
+          setIs2DMode(false);
+        }}
         onUndoMove={handleUndoMove}
         onRequestPromotion={setPendingPromotion}
       />

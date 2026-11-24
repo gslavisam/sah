@@ -3,12 +3,13 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import http from 'http';
 import path from 'path';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   applyChessMove,
   createInitialChessState,
   serializeBoard,
+  validateAndNormalizeFen,
 } from './src/shared/chessRules.ts';
 import type { ChessRulesState, PieceColor } from './src/shared/chessRules.ts';
 import { TIME_CONTROLS } from './src/shared/multiplayerTypes.ts';
@@ -243,7 +244,7 @@ function getGeminiClient(): GoogleGenAI | null {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '8mb' }));
 
   const authStore = createAuthStore();
   const authRateBuckets = new Map<string, { count: number; resetAt: number }>();
@@ -481,6 +482,225 @@ async function startServer() {
       const message = err instanceof Error ? err.message : 'Gemini request failed';
       if (!res.headersSent && !res.writableEnded) {
         res.status(502).json({ text: null, configured: true, error: message });
+      }
+    }
+  });
+
+  app.post('/api/gemini/board-from-image', async (req: Request, res: Response) => {
+    const rawImage = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
+    if (!rawImage) {
+      res.status(400).json({ ok: false, error: 'Nedostaje slika šahovske table.' });
+      return;
+    }
+
+    let mimeType =
+      typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().toLowerCase() : 'image/jpeg';
+    let cleanBase64 = rawImage;
+    const dataUrlMatch = rawImage.match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/i);
+    if (dataUrlMatch) {
+      mimeType = dataUrlMatch[1].toLowerCase();
+      cleanBase64 = dataUrlMatch[2].trim();
+    }
+    if (mimeType === 'image/jpg') {
+      mimeType = 'image/jpeg';
+    }
+    if (mimeType !== 'image/png' && mimeType !== 'image/jpeg' && mimeType !== 'image/webp') {
+      res.status(400).json({ ok: false, error: 'Podržani formati slike su PNG, JPEG i WebP.' });
+      return;
+    }
+    if (!cleanBase64 || cleanBase64.length > 7_000_000) {
+      res.status(400).json({ ok: false, error: 'Slika je prazna ili prevelika za obradu.' });
+      return;
+    }
+
+    const client = getGeminiClient();
+    if (!client) {
+      res.status(503).json({
+        ok: false,
+        configured: false,
+        error: 'Gemini API ključ nije podešen na serveru, pa prepoznavanje slike nije dostupno.',
+      });
+      return;
+    }
+
+    const turnHint =
+      req.body?.turnHint === 'w' || req.body?.turnHint === 'b' ? req.body.turnHint : 'auto';
+    const perspectiveHint =
+      req.body?.perspectiveHint === 'w' || req.body?.perspectiveHint === 'b'
+        ? req.body.perspectiveHint
+        : 'auto';
+
+    const prompt = `Analyze this chessboard image and transcribe the exact chess position into a valid 6-field FEN string.
+
+Rules:
+1. Determine board orientation first:
+   - ${perspectiveHint === 'w' ? 'The user specified White is at the bottom (rank 1 at bottom, rank 8 at top, files a-h left to right).' : perspectiveHint === 'b' ? 'The user specified Black is at the bottom (rank 8 at bottom, rank 1 at top, files h-a left to right).' : 'Inspect rank/file labels (1-8, a-h) or pawn directions to tell whether White is at the bottom ("w") or Black is at the bottom ("b").'}
+2. ALWAYS output the FEN piece placement in canonical order: Rank 8 first down to Rank 1 last, and files a through h left to right (even if Black is at the bottom of the screenshot/photo).
+3. Verify each of the 8 ranks sums to exactly 8 squares. Use uppercase (P,N,B,R,Q,K) for White pieces and lowercase (p,n,b,r,q,k) for Black pieces.
+4. Distinguish Knights (N/n), Bishops (B/b), Queens (Q/q), and Kings (K/k) carefully. Confirm there is exactly 1 White King (K) and 1 Black King (k).
+5. Side to move: ${turnHint === 'w' ? 'Set turn to "w".' : turnHint === 'b' ? 'Set turn to "b".' : 'Infer turn from check, move highlight, or clock if visible; otherwise default to "w".'}
+6. Keep castling rights conservative (include K/Q/k/q only if king and matching rook sit on original e1/a1/h1/e8/a8/h8 squares, else "-").
+7. Set "notes" in Serbian (1 short sentence) noting anything useful (e.g. orientation detected or if anything is slightly blurry).`;
+
+    try {
+      const response = await client.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: [
+          {
+            inlineData: {
+              mimeType,
+              data: cleanBase64,
+            },
+          },
+          { text: prompt },
+        ],
+        config: {
+          maxOutputTokens: 450,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              fen: {
+                type: Type.STRING,
+                description: 'Canonical 6-field FEN string ordered rank 8 to rank 1, files a to h.',
+              },
+              turn: {
+                type: Type.STRING,
+                description: 'Side to move: w or b.',
+              },
+              perspective: {
+                type: Type.STRING,
+                description: 'Orientation in image: w (white at bottom) or b (black at bottom).',
+              },
+              confidence: {
+                type: Type.STRING,
+                description: 'Confidence level: high, medium, or low.',
+              },
+              notes: {
+                type: Type.STRING,
+                description: 'Short note in Serbian about detected orientation or uncertainty.',
+              },
+            },
+            required: ['fen', 'turn', 'perspective', 'confidence'],
+          },
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.LOW,
+          },
+          abortSignal: AbortSignal.timeout(18000),
+        },
+      });
+
+      const rawText = response?.text?.trim();
+      if (!rawText) {
+        if (!res.headersSent && !res.writableEnded) {
+          res.status(502).json({
+            ok: false,
+            configured: true,
+            error: 'AI servis nije vratio odgovor za poslatu sliku.',
+          });
+        }
+        return;
+      }
+
+      let parsedPayload: {
+        fen?: string;
+        turn?: string;
+        perspective?: string;
+        confidence?: string;
+        notes?: string;
+      };
+      try {
+        parsedPayload = JSON.parse(rawText);
+      } catch {
+        if (!res.headersSent && !res.writableEnded) {
+          res.status(422).json({
+            ok: false,
+            configured: true,
+            error: 'AI odgovor nije mogao da se protumači kao validan FEN zapis.',
+          });
+        }
+        return;
+      }
+
+      const rawFen = typeof parsedPayload.fen === 'string' ? parsedPayload.fen.trim() : '';
+      const aiTurn: PieceColor =
+        turnHint !== 'auto'
+          ? turnHint
+          : parsedPayload.turn === 'b'
+            ? 'b'
+            : 'w';
+
+      let validation = validateAndNormalizeFen(rawFen, aiTurn);
+      let adjustedTurnNote = '';
+      if (!validation.ok && validation.opponentInCheck && turnHint === 'auto') {
+        const flippedTurn: PieceColor = aiTurn === 'w' ? 'b' : 'w';
+        const flippedValidation = validateAndNormalizeFen(rawFen, flippedTurn);
+        if (flippedValidation.ok) {
+          validation = flippedValidation;
+          adjustedTurnNote =
+            flippedTurn === 'w'
+              ? ' Automatski podešeno da je Beli na potezu jer je pod šahom.'
+              : ' Automatski podešeno da je Crni na potezu jer je pod šahom.';
+        }
+      }
+
+      if (!validation.ok || !validation.fen || !validation.state) {
+        if (!res.headersSent && !res.writableEnded) {
+          res.status(422).json({
+            ok: false,
+            configured: true,
+            error:
+              validation.error ||
+              'Slika nije mogla pouzdano da se pretvori u šahovsku poziciju. Pokušaj sa jasnijim isečkom table.',
+            rawFen,
+          });
+        }
+        return;
+      }
+
+      const confidence =
+        parsedPayload.confidence === 'high' ||
+        parsedPayload.confidence === 'medium' ||
+        parsedPayload.confidence === 'low'
+          ? parsedPayload.confidence
+          : 'medium';
+      const perspective =
+        parsedPayload.perspective === 'b' || parsedPayload.perspective === 'w'
+          ? parsedPayload.perspective
+          : perspectiveHint === 'b'
+            ? 'b'
+            : 'w';
+      const notes = `${typeof parsedPayload.notes === 'string' ? parsedPayload.notes.trim() : ''}${adjustedTurnNote}`.trim();
+
+      if (!res.headersSent && !res.writableEnded) {
+        res.json({
+          ok: true,
+          configured: true,
+          fen: validation.fen,
+          turn: validation.state.currentTurn,
+          perspective,
+          confidence,
+          notes,
+        });
+      }
+    } catch (err: unknown) {
+      const errName =
+        err && typeof err === 'object' && 'name' in err ? String((err as { name?: unknown }).name) : '';
+      const isAbort = errName === 'AbortError' || errName === 'TimeoutError';
+      if (isAbort) {
+        if (!res.headersSent && !res.writableEnded) {
+          res.status(504).json({
+            ok: false,
+            configured: true,
+            error: 'Obrada slike je trajala predugo. Pokušaj ponovo sa manjom ili jasnijom slikom.',
+          });
+        }
+        return;
+      }
+      console.warn('Gemini board-from-image error:', err);
+      const message = err instanceof Error ? err.message : 'Obrada slike nije uspela.';
+      if (!res.headersSent && !res.writableEnded) {
+        res.status(502).json({ ok: false, configured: true, error: message });
       }
     }
   });

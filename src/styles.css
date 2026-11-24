@@ -67,7 +67,7 @@ html, body, #root {
   background: var(--hud-bg);
   backdrop-filter: blur(12px);
   border: 1px solid var(--hud-border);
-  padding: 8px 16px;
+  padding: 5px 8px 5px 14px;
   border-radius: 999px;
   display: flex;
   align-items: center;
@@ -76,11 +76,84 @@ html, body, #root {
 }
 
 .brand-title {
-  font-size: 0.95rem;
+  font-size: 0.92rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--gold);
+  white-space: nowrap;
+}
+
+.brand-view-btn {
+  border: 1px solid rgba(212, 175, 55, 0.36);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--gold-bright);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.16s ease;
+}
+
+.brand-view-btn:hover {
+  color: #fffbeb;
+  background: rgba(212, 175, 55, 0.18);
+  border-color: var(--gold);
+}
+
+.brand-view-btn.active {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.28), rgba(212, 175, 55, 0.12));
+  border-color: var(--gold);
+  color: var(--gold-bright);
+  box-shadow: 0 0 10px rgba(212, 175, 55, 0.22);
+}
+
+#hud-right {
+  justify-content: flex-end;
+}
+
+.hud-account-online-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(13, 17, 28, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(212, 175, 55, 0.34);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.hud-account-online-group .hud-btn {
+  min-height: 30px;
+  padding: 5px 11px;
+  font-size: 0.76rem;
+  box-shadow: none;
+  border-radius: 999px;
+}
+
+.online-hud-btn {
+  border-color: rgba(56, 189, 248, 0.34);
+  background: rgba(56, 189, 248, 0.1);
+  color: #bae6fd;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.online-hud-btn:hover:not(:disabled) {
+  border-color: rgba(56, 189, 248, 0.7);
+  background: rgba(56, 189, 248, 0.2);
+  color: #f0f9ff;
+}
+
+.online-hud-btn.active {
+  border-color: rgba(52, 211, 153, 0.8);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(56, 189, 248, 0.18));
+  color: #d1fae5;
 }
 
 .status-pill {
@@ -218,6 +291,7 @@ body.cinematic-ui-hidden #hud-top,
 body.cinematic-ui-hidden #hud-bottom,
 body.cinematic-ui-hidden #hud-dock,
 body.cinematic-ui-hidden .eval-bar-hud,
+body.cinematic-ui-hidden .analysis-panel-floating,
 body.cinematic-ui-hidden .mobile-controls-trigger {
   opacity: 0 !important;
   pointer-events: none !important;
@@ -321,6 +395,12 @@ body.cinematic-ui-hidden .mobile-controls-trigger {
   color: #e0f2fe;
 }
 
+#hud-dock .hud-btn.analysis-active {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(212, 175, 55, 0.15));
+  border-color: rgba(52, 211, 153, 0.78);
+  color: #d1fae5;
+}
+
 .difficulty-picker-wrap {
   position: relative;
   display: inline-flex;
@@ -344,6 +424,12 @@ body.cinematic-ui-hidden .mobile-controls-trigger {
   flex-direction: column;
   gap: 4px;
   z-index: 35;
+}
+
+.piece-set-popover {
+  width: 268px;
+  max-height: min(62vh, 420px);
+  overflow-y: auto;
 }
 
 .ai-difficulty-popover-header {
@@ -650,21 +736,44 @@ body.cinematic-ui-hidden .restore-ui-button {
   }
 
   #hud-left {
-    flex: 1 1 auto;
+    flex: 1 1 100%;
     min-width: 0;
     flex-wrap: nowrap;
     gap: 6px;
   }
 
+  #hud-right {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .hud-account-online-group {
+    padding: 2px;
+    gap: 3px;
+  }
+
+  .hud-account-online-group .hud-btn {
+    min-height: 28px;
+    padding: 4px 9px;
+    font-size: 0.71rem;
+  }
+
   .brand-pill {
-    padding: 7px 11px;
+    padding: 4px 6px 4px 10px;
+    gap: 7px;
     flex-shrink: 0;
   }
 
   .brand-title {
-    font-size: 0.76rem;
-    letter-spacing: 0.07em;
+    font-size: 0.74rem;
+    letter-spacing: 0.06em;
     white-space: nowrap;
+  }
+
+  .brand-view-btn {
+    padding: 2px 7px;
+    font-size: 0.67rem;
   }
 
   .status-pill {
@@ -809,7 +918,8 @@ body.cinematic-ui-hidden .restore-ui-button {
     flex-basis: 100%;
   }
 
-  #hud-dock .difficulty-picker-wrap #btn-ai-difficulty {
+  #hud-dock .difficulty-picker-wrap #btn-ai-difficulty,
+  #hud-dock .difficulty-picker-wrap #btn-piece-set {
     width: 100%;
     flex: none;
   }
@@ -1007,11 +1117,17 @@ body.cinematic-ui-hidden .restore-ui-button {
 
 @media (max-width: 380px) {
   .brand-pill {
-    padding: 6px 9px;
+    padding: 4px 5px 4px 8px;
+    gap: 5px;
   }
 
   .brand-title {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
+  }
+
+  .brand-view-btn {
+    padding: 2px 5px;
+    font-size: 0.63rem;
   }
 
   .status-pill {
@@ -2738,7 +2854,9 @@ body.academy-puzzle-active #checkmate-overlay {
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.75), 0 0 32px rgba(212, 175, 55, 0.12);
   border-radius: 14px;
   padding: 16px;
-  max-width: 620px;
+  max-width: 660px;
+  max-height: 95dvh;
+  overflow-y: auto;
   width: 100%;
   box-sizing: border-box;
 }
@@ -2900,6 +3018,35 @@ body.academy-puzzle-active #checkmate-overlay {
   color: #f0f9ff;
   border-color: rgba(56, 189, 248, 0.8);
   font-weight: 700;
+}
+
+.chess-2d-btn-analysis {
+  background: rgba(16, 185, 129, 0.12);
+  color: #a7f3d0;
+  border-color: rgba(52, 211, 153, 0.38);
+}
+
+.chess-2d-btn-analysis:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(52, 211, 153, 0.68);
+}
+
+.chess-2d-btn-analysis.active {
+  background: rgba(16, 185, 129, 0.28);
+  color: #ecfdf5;
+  border-color: rgba(52, 211, 153, 0.85);
+  font-weight: 700;
+}
+
+.chess-2d-btn-editor {
+  background: rgba(212, 175, 55, 0.14);
+  color: #fde68a;
+  border-color: rgba(212, 175, 55, 0.4);
+}
+
+.chess-2d-btn-editor:hover:not(:disabled) {
+  background: rgba(212, 175, 55, 0.24);
+  border-color: rgba(245, 215, 110, 0.75);
 }
 
 .chess-2d-btn:disabled {
@@ -4437,6 +4584,547 @@ body.academy-puzzle-active #checkmate-overlay {
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+/* =========================================================================
+   Analysis Mode Panel (3D Floating & 2D Embedded)
+   ========================================================================= */
+
+.analysis-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(11, 15, 26, 0.9);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(52, 211, 153, 0.42);
+  border-radius: 14px;
+  padding: 10px 12px;
+  color: #e2e8f0;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.58), 0 0 18px rgba(16, 185, 129, 0.12);
+  box-sizing: border-box;
+}
+
+.analysis-panel-floating {
+  position: fixed;
+  top: 76px;
+  right: 76px;
+  width: min(372px, calc(100vw - 96px));
+  z-index: 78;
+  pointer-events: auto;
+}
+
+.analysis-panel-floating.collapsed {
+  width: auto;
+  min-width: 240px;
+}
+
+.analysis-panel-embedded {
+  width: 100%;
+  margin-bottom: 10px;
+  background: rgba(13, 18, 30, 0.78);
+}
+
+.analysis-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.analysis-panel-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.analysis-panel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.22);
+  border: 1px solid rgba(52, 211, 153, 0.52);
+  color: #a7f3d0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.analysis-panel-subtitle {
+  font-size: 0.73rem;
+  color: #cbd5e1;
+}
+
+.analysis-panel-subtitle strong {
+  color: #fef08a;
+}
+
+.analysis-panel-header-btns {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.analysis-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.analysis-mini-btn:hover {
+  border-color: rgba(212, 175, 55, 0.55);
+  color: #fff;
+}
+
+.analysis-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.analysis-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.analysis-row-label {
+  font-size: 0.71rem;
+  color: #94a3b8;
+  font-weight: 700;
+}
+
+.analysis-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.analysis-seg-btn {
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #cbd5e1;
+  font: inherit;
+  font-size: 0.71rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.analysis-seg-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.analysis-seg-btn.active {
+  background: rgba(212, 175, 55, 0.22);
+  border-color: rgba(245, 215, 110, 0.65);
+  color: #fef08a;
+}
+
+.analysis-turn-btn {
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.71rem;
+  cursor: pointer;
+}
+
+.analysis-turn-btn:hover {
+  border-color: rgba(245, 215, 110, 0.75);
+  background: rgba(212, 175, 55, 0.16);
+}
+
+.analysis-turn-btn strong {
+  color: #fef08a;
+}
+
+.analysis-fen-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.analysis-fen-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(7, 10, 18, 0.88);
+  color: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.71rem;
+}
+
+.analysis-fen-input:focus {
+  outline: none;
+  border-color: rgba(52, 211, 153, 0.7);
+}
+
+.analysis-action-btn {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f5f9;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.analysis-action-btn:hover:not(:disabled) {
+  border-color: rgba(212, 175, 55, 0.65);
+  background: rgba(212, 175, 55, 0.16);
+}
+
+.analysis-action-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.analysis-action-btn.primary {
+  border-color: rgba(212, 175, 55, 0.55);
+  background: rgba(212, 175, 55, 0.2);
+  color: #fef08a;
+}
+
+.analysis-action-btn.upload {
+  border-color: rgba(52, 211, 153, 0.55);
+  background: rgba(16, 185, 129, 0.2);
+  color: #a7f3d0;
+}
+
+.analysis-action-btn.upload:hover:not(:disabled) {
+  border-color: rgba(110, 231, 183, 0.85);
+  background: rgba(16, 185, 129, 0.32);
+}
+
+.analysis-action-btn.editor {
+  border-color: rgba(212, 175, 55, 0.52);
+  background: rgba(212, 175, 55, 0.16);
+  color: #fde68a;
+}
+
+.analysis-action-btn.editor:hover:not(:disabled),
+.analysis-action-btn.editor.active {
+  border-color: rgba(245, 215, 110, 0.88);
+  background: rgba(212, 175, 55, 0.28);
+  color: #fffbeb;
+}
+
+.analysis-image-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.analysis-hidden-file-input {
+  display: none;
+}
+
+.analysis-mini-select {
+  flex: 1 1 92px;
+  min-width: 0;
+  padding: 5px 7px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(9, 13, 22, 0.92);
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.analysis-hint-note {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  line-height: 1.3;
+}
+
+.analysis-feedback {
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.analysis-feedback.ok {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  color: #a7f3d0;
+}
+
+.analysis-feedback.err {
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+}
+
+/* ── Board Editor (2D Manual Setup) ── */
+.chess-2d-editor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  background: rgba(13, 18, 30, 0.86);
+  border: 1px solid rgba(212, 175, 55, 0.42);
+  box-shadow: inset 0 0 18px rgba(212, 175, 55, 0.08);
+}
+
+.chess-2d-editor-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.chess-2d-editor-tool-btn {
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.chess-2d-editor-tool-btn:hover {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(212, 175, 55, 0.45);
+}
+
+.chess-2d-editor-tool-btn.active {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.8);
+  color: #e0f2fe;
+}
+
+.chess-2d-editor-palettes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chess-2d-editor-palette-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.chess-2d-editor-palette-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #cbd5e1;
+  min-width: 34px;
+}
+
+.chess-2d-editor-palette-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.chess-2d-editor-piece-btn {
+  width: 32px;
+  height: 32px;
+  padding: 3px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(240, 217, 181, 0.18);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.chess-2d-editor-piece-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(245, 215, 110, 0.72);
+  background: rgba(240, 217, 181, 0.3);
+}
+
+.chess-2d-editor-piece-btn.active {
+  border-color: #facc15;
+  background: rgba(212, 175, 55, 0.36);
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.32);
+}
+
+.chess-2d-editor-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chess-2d-editor-turn-group {
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.chess-2d-editor-turn-btn {
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #cbd5e1;
+  font: inherit;
+  font-size: 0.71rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chess-2d-editor-turn-btn.active {
+  background: rgba(212, 175, 55, 0.24);
+  border-color: rgba(245, 215, 110, 0.65);
+  color: #fef08a;
+}
+
+.chess-2d-editor-castling {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.7rem;
+  color: #cbd5e1;
+}
+
+.chess-2d-editor-castling-label {
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.chess-2d-editor-castling label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.chess-2d-editor-castling label.disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.chess-2d-editor-footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chess-2d-editor-validation {
+  flex: 1 1 240px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.chess-2d-editor-validation.ok {
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(52, 211, 153, 0.42);
+  color: #a7f3d0;
+}
+
+.chess-2d-editor-validation.err {
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(248, 113, 113, 0.48);
+  color: #fecaca;
+}
+
+.chess-2d-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chess-2d-editor-apply-btn {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(52, 211, 153, 0.75);
+  background: rgba(16, 185, 129, 0.28);
+  color: #ecfdf5;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.chess-2d-editor-apply-btn:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.42);
+  border-color: rgba(110, 231, 183, 0.95);
+}
+
+.chess-2d-editor-apply-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chess-2d-board.editor-active {
+  border-color: #d4af37;
+}
+
+@media (max-width: 768px) {
+  .analysis-panel-floating {
+    top: 64px;
+    left: 12px;
+    right: 54px;
+    width: auto;
+  }
+
+  .chess-2d-editor-palettes {
+    grid-template-columns: 1fr;
+  }
 }
 
 

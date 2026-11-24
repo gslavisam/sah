@@ -14,11 +14,11 @@ index.html
        ├── React StrictMode
        └── src/App.tsx
             ├── HUD (3 kapsule: Režimi, Partija, Podešavanja) i modali
-            │    (AIBubble, Academy, AccountModal, OnlineDuelModal, OnlineMatchBar, EvalBar, Classic2DBoard)
+            │    (AIBubble, AnalysisPanel, Academy, AccountModal, OnlineDuelModal, OnlineMatchBar, EvalBar, Classic2DBoard + Editor table)
             ├── stockfishService ── Web Worker (public/stockfish/stockfish-19-lite-single.*)
             ├── authService & multiplayerService ── REST API (/api/auth, /api/profile) & WebSocket (/ws)
             ├── pgnService, lichessExplorerService & onlineChessImportService
-            ├── geminiService ── serverski proxy (/api/gemini/*) / lokalni fallback
+            ├── geminiService ── serverski proxy (/api/gemini/*) / lokalni fallback + slika u FEN
             ├── progressionService & academyProgression ── localStorage + sinhronizacija sa nalogom
             ├── sceneThemes, sceneEnvironments, opponentHolograms & outdoorParkEnv ── Three.js ambijenti
             ├── voiceService & soundService ── lokalni MP3 glasovi i Web Audio SFX
@@ -26,8 +26,8 @@ index.html
 
 server.ts (Express 5 + WebSocket + Vite/dist)
   ├── src/server/authStore.ts ── SQLite (node:sqlite) korisnički nalozi, sesije, XP i istorija partija
-  ├── /api/gemini/* ── @google/genai proxy (gemini-3.1-flash-lite, GEMINI_API_KEY na serveru)
-  ├── src/shared/chessRules.ts ── deljena šahovska pravila za validaciju poteza i Stockfish ELO profile
+  ├── /api/gemini/* ── @google/genai proxy (gemini-3.1-flash-lite za tekst, gemini-4-hydrogen za sliku u FEN)
+  ├── src/shared/chessRules.ts ── deljena šahovska pravila za validaciju poteza, FEN normalizaciju, Editor table i Stockfish ELO profile
   └── WebSocket menadžer soba (/ws) ── kreiranje soba, autoritativni satovi i prenos poteza uživo
 
 public/assets/
@@ -49,16 +49,16 @@ flowchart TB
     User(["Igrač (Pregledač / Mobilni)"])
 
     subgraph Browser["Klijentska aplikacija (React 19 + TypeScript)"]
-        UI["React HUD, 2D Tabla i Akademija"]
+        UI["React HUD, Analiza, 2D Tabla i Akademija"]
         ThreeEngine["Three.js 3D Scena (wizardChessEngine.js)"]
-        SharedClient["Deljena pravila & ELO profili (chessRules.ts)"]
+        SharedClient["Deljena pravila, FEN & ELO profili (chessRules.ts)"]
         StockfishWorker["Stockfish 19 Lite WASM (Web Worker)"]
         AudioEngine["Glasovni MP3 i Web Audio SFX"]
     end
 
     subgraph Backend["Sopstveni Backend (server.ts)"]
         RestAuth["REST API (/api/auth/*, /api/profile/*)"]
-        GeminiProxy["Gemini Proxy (/api/gemini/status, /generate)"]
+        GeminiProxy["Gemini Proxy (/api/gemini/status, /generate, /board-from-image)"]
         WSHub["WebSocket Menadžer Soba (/ws)"]
         AuthDB["AuthStore (node:sqlite + scrypt)"]
         SharedServer["Serverska validacija (chessRules.ts)"]

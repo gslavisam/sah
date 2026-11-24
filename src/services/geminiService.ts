@@ -89,6 +89,25 @@ export interface StockfishHintContext {
   evalLabel?: string;
 }
 
+export interface BoardFromImageRequest {
+  imageBase64: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  turnHint?: 'auto' | 'w' | 'b';
+  perspectiveHint?: 'auto' | 'w' | 'b';
+}
+
+export interface BoardFromImageResult {
+  ok: boolean;
+  configured?: boolean;
+  fen?: string;
+  turn?: 'w' | 'b';
+  perspective?: 'w' | 'b';
+  confidence?: 'high' | 'medium' | 'low';
+  notes?: string;
+  rawFen?: string;
+  error?: string;
+}
+
 const PIECE_NAMES_SR: Record<string, string> = {
   pawn: 'pešaka',
   rook: 'topa',
@@ -503,6 +522,56 @@ ${stockfishHint
     } catch (err) {
       console.warn('Gemini hint error, using fallback:', err);
       return buildConcreteFallback();
+    }
+  }
+
+  public async extractFenFromBoardImage(
+    request: BoardFromImageRequest,
+    fetchImpl: typeof fetch = fetch
+  ): Promise<BoardFromImageResult> {
+    try {
+      const response = await fetchImpl('/api/gemini/board-from-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageBase64: request.imageBase64,
+          mimeType: request.mimeType,
+          turnHint: request.turnHint || 'auto',
+          perspectiveHint: request.perspectiveHint || 'auto',
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as BoardFromImageResult | null;
+      if (!response.ok || !payload?.ok || !payload.fen) {
+        return {
+          ok: false,
+          configured: payload?.configured,
+          rawFen: payload?.rawFen,
+          error:
+            payload?.error ||
+            'Slika pozicije nije mogla da se obradi. Proveri da li se cela šahovska tabla jasno vidi.',
+        };
+      }
+
+      return {
+        ok: true,
+        configured: payload.configured ?? true,
+        fen: payload.fen,
+        turn: payload.turn === 'b' ? 'b' : 'w',
+        perspective: payload.perspective === 'b' ? 'b' : 'w',
+        confidence: payload.confidence || 'medium',
+        notes: payload.notes || '',
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error:
+          err instanceof Error && err.message
+            ? err.message
+            : 'Greška pri slanju slike serveru.',
+      };
     }
   }
 }
