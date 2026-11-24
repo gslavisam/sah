@@ -1771,6 +1771,7 @@ export function initWizardChess() {
     let aiTimer = null;
     let academyMode = false;
     let academyTutorialMode = false;
+    let academyTacticsMode = false;
     let academySavedState = null;
     let gameStartingFen = DEFAULT_START_FEN;
     let matchResultOverride = null;
@@ -2715,6 +2716,7 @@ export function initWizardChess() {
         return false;
       }
       academyTutorialMode = false;
+      academyTacticsMode = false;
       aiSearchEpoch += 1;
       isSearchingAIMove = false;
       stockfishService.cancelPending();
@@ -2756,7 +2758,9 @@ export function initWizardChess() {
         console.warn('Cannot load academy FEN position: invalid FEN.');
         return false;
       }
-      academyTutorialMode = true;
+      const isTactics = Boolean(options.tacticsMode);
+      academyTutorialMode = !isTactics;
+      academyTacticsMode = isTactics;
       aiSearchEpoch += 1;
       isSearchingAIMove = false;
       stockfishService.cancelPending();
@@ -2798,8 +2802,15 @@ export function initWizardChess() {
       capturedByWhite = Math.max(0, 16 - blackCount);
       capturedByBlack = Math.max(0, 16 - whiteCount);
 
-      const viewSide = options.viewSide === 'b' ? 'b' : 'w';
-      playerColor = viewSide;
+      const viewSide =
+        options.viewSide === 'b'
+          ? 'b'
+          : options.viewSide === 'w'
+            ? 'w'
+            : isTactics
+              ? parsed.currentTurn
+              : 'w';
+      playerColor = isTactics ? parsed.currentTurn : viewSide;
       playerCamSide = viewSide;
       primaryCameraView = 'player';
       setActiveCamButton('btn-camera-view');
@@ -2808,6 +2819,13 @@ export function initWizardChess() {
 
       renderer.shadowMap.needsUpdate = true;
       updateTurnUI();
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(
+          new CustomEvent('wizardchess:academy-position', {
+            detail: { fen: getFen(), currentTurn, playerColor, tacticsMode: isTactics }
+          })
+        );
+      }
       return true;
     }
 
@@ -3146,11 +3164,26 @@ export function initWizardChess() {
       if (!ok && !wasInAcademy) {
         academyMode = false;
         academyTutorialMode = false;
+        academyTacticsMode = false;
         academySavedState = null;
         syncOpponentHologramVisibility();
         return false;
       }
       return ok;
+    }
+
+    function enterTacticsPuzzle(fen, options = {}) {
+      return enterAcademyTutorial(fen || DEFAULT_START_FEN, {
+        ...options,
+        tacticsMode: true
+      });
+    }
+
+    function setTacticsFenPosition(fen, options = {}) {
+      return setAcademyFenPosition(fen || DEFAULT_START_FEN, {
+        ...options,
+        tacticsMode: true
+      });
     }
 
     function executeTutorialMove(fromSquare, toSquare, promotion) {
@@ -3167,6 +3200,21 @@ export function initWizardChess() {
       });
     }
 
+    function executeTacticsMove(fromSquare, toSquare, promotion, options = {}) {
+      if (!academyMode || !academyTacticsMode) return false;
+      const fromCoords = squareToCoords(fromSquare);
+      const toCoords = squareToCoords(toSquare);
+      if (!fromCoords || !toCoords) return false;
+      if (isAnimatingMove) {
+        completeCurrentMoveImmediately();
+      }
+      return executeChessMove(fromCoords.r, fromCoords.c, toCoords.r, toCoords.c, {
+        promotion,
+        tacticsAutoReply: Boolean(options.isAutoReply),
+        instant: Boolean(options.instant)
+      });
+    }
+
     function takeOverAcademyGame(preferredPlayerColor = 'w') {
       if (!academyMode) return false;
       completeCurrentMoveImmediately();
@@ -3175,6 +3223,7 @@ export function initWizardChess() {
       academySavedState = null;
       academyMode = false;
       academyTutorialMode = false;
+      academyTacticsMode = false;
       gameMode = 'single';
       aiAutoPlay = true;
       playerColor = preferredPlayerColor === 'b' ? 'b' : 'w';
@@ -3203,6 +3252,7 @@ export function initWizardChess() {
       academySavedState = null;
       academyMode = false;
       academyTutorialMode = false;
+      academyTacticsMode = false;
       gameMode = saved.gameMode;
       playerColor = saved.playerColor;
       aiAutoPlay = saved.aiAutoPlay;
@@ -3325,6 +3375,7 @@ export function initWizardChess() {
         academySavedState = null;
         academyMode = false;
         academyTutorialMode = false;
+        academyTacticsMode = false;
       }
       if (aiTimer) {
         clearTimeout(aiTimer);
@@ -3466,6 +3517,7 @@ export function initWizardChess() {
     function resetChessBoard(orientCamera = true, options = {}) {
       if (gameMode === 'online' && !options.force) return false;
       academyTutorialMode = false;
+      academyTacticsMode = false;
       aiSearchEpoch += 1;
       isSearchingAIMove = false;
       stockfishService.newGame();
@@ -4122,7 +4174,7 @@ export function initWizardChess() {
       const epCapturedC = isEnPassant ? matchedLegal.capturedC : -1;
       const captured = isEnPassant ? boardState[epCapturedR]?.[epCapturedC] : targetOnDest;
       const isCapture = Boolean(captured);
-      const skipCaptureDuel = Boolean(options.tutorialStep || academyTutorialMode) || analysisMode;
+      const skipCaptureDuel = Boolean(options.tutorialStep || academyTutorialMode) || analysisMode || academyTacticsMode;
       const animateCaptureDuel = isCapture && !skipCaptureDuel;
       const nextEnPassantTarget =
         piece.type === 'pawn' && Math.abs(toR - fromR) === 2
@@ -4591,7 +4643,8 @@ export function initWizardChess() {
                   detail: {
                     ...moveDetail,
                     isCheckmate: isMate,
-                    tutorialStep: Boolean(options.tutorialStep)
+                    tutorialStep: Boolean(options.tutorialStep),
+                    tacticsAutoReply: Boolean(options.tacticsAutoReply)
                   }
                 })
               : new CustomEvent('wizardchess:move', { detail: moveDetail })
@@ -5754,7 +5807,7 @@ export function initWizardChess() {
           const winnerLabel = currentTurn === 'w' ? 'Crni' : 'Beli';
           if (turnText) {
             turnText.textContent = academyMode
-              ? (academyTutorialMode ? 'Tutorijal završen' : 'Zagonetka završena')
+              ? (academyTutorialMode ? 'Tutorijal završen' : academyTacticsMode ? 'Taktička arena završena' : 'Zagonetka završena')
               : `Šah-mat — ${winnerLabel} pobeđuje`;
           }
           if (!academyMode && !is2DModeActive && !checkmateState.active) {
@@ -5797,7 +5850,11 @@ export function initWizardChess() {
 
       if (modeBadge) {
         if (academyMode) {
-          modeBadge.textContent = academyTutorialMode ? 'Akademija · 3D Tutorijal' : 'Akademija';
+          modeBadge.textContent = academyTutorialMode
+            ? 'Akademija · 3D Tutorijal'
+            : academyTacticsMode
+              ? 'Akademija · Taktička arena'
+              : 'Akademija';
         } else if (gameMode === 'online') {
           modeBadge.textContent = `Online Duel • ${playerColor === 'w' ? 'Beli' : 'Crni'}`;
         } else if (analysisMode) {
@@ -5892,7 +5949,7 @@ export function initWizardChess() {
         );
         if (move) {
           const movingPiece = boardState[selectedSquare.r]?.[selectedSquare.c];
-          if (!academyMode && movingPiece?.type === 'pawn' && (move.r === 0 || move.r === 7)) {
+          if ((!academyMode || academyTacticsMode) && movingPiece?.type === 'pawn' && (move.r === 0 || move.r === 7)) {
             const promoReq = {
               fromR: selectedSquare.r,
               fromC: selectedSquare.c,
@@ -6144,7 +6201,10 @@ export function initWizardChess() {
       setAcademyPosition,
       setAcademyFenPosition,
       enterAcademyTutorial,
+      enterTacticsPuzzle,
+      setTacticsFenPosition,
       executeTutorialMove,
+      executeTacticsMove,
       takeOverAcademyGame,
       exitAcademy,
       undoPlayerMove,

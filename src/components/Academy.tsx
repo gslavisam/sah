@@ -31,6 +31,17 @@ import {
   fetchPgnFromOnlineUrl,
   type RemoteChessGameSummary
 } from '../services/onlineChessImportService';
+import {
+  getTacticThemeLabel,
+  TACTIC_THEMES,
+  type TacticPuzzle,
+  type TacticThemeFilter
+} from '../data/tacticsArenaCatalog';
+import {
+  tacticsArenaService,
+  type ArenaTrainingMode,
+  type TacticsArenaStats
+} from '../services/tacticsArenaService';
 
 type ImportSourceTab = 'masters' | 'online' | 'file';
 
@@ -63,7 +74,7 @@ const MASTERS_POSITION_PRESETS: { id: string; label: string; fen: string }[] = [
 ];
 
 type AcademyProps = {
-  view: 'home' | 'puzzle' | 'tutorial';
+  view: 'home' | 'puzzle' | 'tutorial' | 'arena';
   puzzleId: string | null;
   feedback: 'idle' | 'wrong' | 'solved';
   hintCount: number;
@@ -73,6 +84,18 @@ type AcademyProps = {
   tutorialGameOver: boolean;
   tutorialAutoPlay: boolean;
   customLessons: ChessAcademyLesson[];
+  arenaMode: ArenaTrainingMode;
+  arenaTheme: TacticThemeFilter;
+  arenaPuzzle: TacticPuzzle | null;
+  arenaMoveIndex: number;
+  arenaFeedback: 'idle' | 'replying' | 'wrong' | 'solved' | 'gameover';
+  arenaLives: number;
+  arenaStreak: number;
+  arenaHintCount: number;
+  arenaRatingDelta: number | null;
+  arenaDailyLoading: boolean;
+  arenaDailyStatus: 'idle' | 'ready' | 'rate-limited' | 'offline';
+  is2DMode: boolean;
   error: string | null;
   onClose: () => void;
   onOpenPuzzle: (id: string) => void;
@@ -81,6 +104,14 @@ type AcademyProps = {
   hasNextPuzzle: boolean;
   onShowHint: () => void;
   onRetry: () => void;
+  onOpenArena: (mode?: ArenaTrainingMode, theme?: TacticThemeFilter) => void;
+  onChangeArenaMode: (mode: ArenaTrainingMode) => void;
+  onChangeArenaTheme: (theme: TacticThemeFilter) => void;
+  onArenaShowHint: () => void;
+  onArenaRetry: () => void;
+  onArenaNext: () => void;
+  onLeaveArena: () => void;
+  onToggleArena2D: () => void;
   onOpenTutorial: (category?: AcademyCategory) => void;
   onSelectTutorialLesson: (lessonId: string) => void;
   onPlayTutorialStep: () => void;
@@ -97,6 +128,13 @@ type AcademyProps = {
 
 type AreaId = AcademyAreaId | 'puzzles';
 
+const ARENA_MODES: { id: ArenaTrainingMode; label: string; shortDesc: string }[] = [
+  { id: 'elo', label: '📈 Elo trening', shortDesc: 'Prilagodljiva težina po tvom taktičkom rejtingu' },
+  { id: 'survival', label: '🔥 Survival', shortDesc: 'Rastuća težina sa 3 života — bez greške' },
+  { id: 'theme', label: '🎯 Po temi', shortDesc: 'Ciljani motivi: mat u 2/3, viljuška, vezivanje, ražanj' },
+  { id: 'daily', label: '📅 Dnevni izazov', shortDesc: 'Lichess dnevna zagonetka za današnji datum' }
+];
+
 export function Academy({
   view,
   puzzleId,
@@ -108,6 +146,18 @@ export function Academy({
   tutorialGameOver,
   tutorialAutoPlay,
   customLessons,
+  arenaMode,
+  arenaTheme,
+  arenaPuzzle,
+  arenaMoveIndex,
+  arenaFeedback,
+  arenaLives,
+  arenaStreak,
+  arenaHintCount,
+  arenaRatingDelta,
+  arenaDailyLoading,
+  arenaDailyStatus,
+  is2DMode,
   error,
   onClose,
   onOpenPuzzle,
@@ -116,6 +166,14 @@ export function Academy({
   hasNextPuzzle,
   onShowHint,
   onRetry,
+  onOpenArena,
+  onChangeArenaMode,
+  onChangeArenaTheme,
+  onArenaShowHint,
+  onArenaRetry,
+  onArenaNext,
+  onLeaveArena,
+  onToggleArena2D,
   onOpenTutorial,
   onSelectTutorialLesson,
   onPlayTutorialStep,
@@ -134,6 +192,7 @@ export function Academy({
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [answerSubmitted, setAnswerSubmitted] = useState(false);
   const [, setProgressVersion] = useState(0);
+  const [arenaStats, setArenaStats] = useState<TacticsArenaStats>(() => tacticsArenaService.getStats());
   const [importerOpen, setImporterOpen] = useState(false);
   const [leftPanelMinimized, setLeftPanelMinimized] = useState(false);
   const [briefModalOpen, setBriefModalOpen] = useState(false);
@@ -200,6 +259,13 @@ export function Academy({
   useEffect(() => {
     const unsubscribe = academyProgression.subscribe(() => {
       setProgressVersion((version) => version + 1);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = tacticsArenaService.subscribe(() => {
+      setArenaStats(tacticsArenaService.getStats());
     });
     return unsubscribe;
   }, []);
@@ -273,7 +339,7 @@ export function Academy({
   }, []);
 
   useEffect(() => {
-    if (view !== 'puzzle' && view !== 'tutorial') return;
+    if (view !== 'puzzle' && view !== 'tutorial' && view !== 'arena') return;
     document.body.classList.add('academy-puzzle-active');
     return () => document.body.classList.remove('academy-puzzle-active');
   }, [view]);
@@ -352,6 +418,8 @@ export function Academy({
         onLeavePuzzle();
       } else if (view === 'tutorial') {
         onLeaveTutorial();
+      } else if (view === 'arena') {
+        onLeaveArena();
       } else if (selectedLessonId) {
         setSelectedLessonId(null);
         setSelectedAnswer(null);
@@ -364,7 +432,7 @@ export function Academy({
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [briefModalOpen, onClose, onLeavePuzzle, onLeaveTutorial, selectedArea, selectedLessonId, view]);
+  }, [briefModalOpen, onClose, onLeaveArena, onLeavePuzzle, onLeaveTutorial, selectedArea, selectedLessonId, view]);
 
   const openLesson = (id: string) => {
     setSelectedLessonId(id);
@@ -402,6 +470,8 @@ export function Academy({
       onLeavePuzzle();
     } else if (view === 'tutorial') {
       onLeaveTutorial();
+    } else if (view === 'arena') {
+      onLeaveArena();
     } else if (selectedLessonId) {
       setSelectedLessonId(null);
       setSelectedAnswer(null);
@@ -829,21 +899,31 @@ export function Academy({
     );
   };
 
-  const isBoardDockMode = view === 'puzzle' || view === 'tutorial';
+  const isBoardDockMode = view === 'puzzle' || view === 'tutorial' || view === 'arena';
   const isLeftMinimized = view === 'tutorial' && leftPanelMinimized;
   const title =
     view === 'puzzle'
       ? 'Zagonetka'
-      : view === 'tutorial'
-        ? activeTutorialLesson.name
-        : selectedLesson?.title ||
-          (selectedArea
-            ? ACADEMY_AREAS.find((area) => area.id === selectedArea)?.title
-            : 'Šahovska akademija');
+      : view === 'arena'
+        ? '⚡ Taktička arena'
+        : view === 'tutorial'
+          ? activeTutorialLesson.name
+          : selectedLesson?.title ||
+            (selectedArea
+              ? ACADEMY_AREAS.find((area) => area.id === selectedArea)?.title
+              : 'Šahovska akademija');
+
+  const arenaTotalPlayerMoves = arenaPuzzle ? Math.ceil(arenaPuzzle.solutionUci.length / 2) : 0;
+  const arenaCurrentPlayerStep = arenaPuzzle
+    ? Math.min(Math.floor(arenaMoveIndex / 2) + 1, Math.max(1, arenaTotalPlayerMoves))
+    : 0;
+  const arenaSolvedPlayerSteps = arenaPuzzle
+    ? Math.min(Math.ceil(arenaMoveIndex / 2), arenaTotalPlayerMoves)
+    : 0;
 
   return (
     <div
-      className={`academy-backdrop ${isBoardDockMode ? 'puzzle-mode' : ''} ${view === 'tutorial' ? 'tutorial-mode' : ''}`}
+      className={`academy-backdrop ${isBoardDockMode ? 'puzzle-mode' : ''} ${view === 'tutorial' ? 'tutorial-mode' : ''} ${view === 'arena' ? 'arena-mode' : ''}`}
       role="dialog"
       aria-modal={view === 'home'}
       aria-labelledby="academy-title"
@@ -856,7 +936,9 @@ export function Academy({
                 ? isLeftMinimized
                   ? `3D TUTORIJAL · KORAK ${tutorialStepIndex}/${totalTutorialSteps}`
                   : 'MENTOR ALISTAIR • 3D TUTORIJAL'
-                : 'WIZARD CHESS • UČIONICA'}
+                : view === 'arena'
+                  ? 'TAKTIČKI TRENING • VIŠEPOTEZNE KOMBINACIJE'
+                  : 'WIZARD CHESS • UČIONICA'}
             </p>
             <h1 id="academy-title">{title}</h1>
           </div>
@@ -938,6 +1020,256 @@ export function Academy({
               ) : null}
               <button type="button" className="academy-secondary-button" onClick={onLeavePuzzle}>Nazad na zagonetke</button>
             </div>
+          </div>
+        ) : view === 'arena' ? (
+          <div id="tactics-arena-panel" className="academy-puzzle-content academy-arena-panel">
+            <div className="arena-stats-row">
+              <div className="arena-elo-pill" title="Tvoj adaptivni taktički rejting">
+                <span className="arena-elo-label">Taktički Elo</span>
+                <strong className="arena-elo-value">{arenaStats.rating}</strong>
+                {arenaRatingDelta !== null && arenaRatingDelta !== 0 ? (
+                  <span className={`arena-rating-delta ${arenaRatingDelta > 0 ? 'pos' : 'neg'}`}>
+                    {arenaRatingDelta > 0 ? `+${arenaRatingDelta}` : arenaRatingDelta}
+                  </span>
+                ) : null}
+              </div>
+
+              {arenaMode === 'survival' ? (
+                <div className="arena-survival-hud" aria-label={`Survival životi: ${arenaLives} od 3`}>
+                  <div className="arena-hearts">
+                    {[0, 1, 2].map((idx) => (
+                      <span
+                        key={idx}
+                        className={`arena-heart ${idx < arenaLives ? 'alive' : 'lost'}`}
+                        aria-hidden="true"
+                      >
+                        {idx < arenaLives ? '❤️' : '🖤'}
+                      </span>
+                    ))}
+                  </div>
+                  <span className="arena-streak-badge">
+                    Serija {arenaStreak} · Rekord {arenaStats.bestSurvivalStreak}
+                  </span>
+                </div>
+              ) : (
+                <div className="arena-top-right-badges">
+                  <span className="arena-solved-pill">Rešeno: {arenaStats.solvedCount}</span>
+                  <button
+                    type="button"
+                    id="btn-arena-toggle-2d"
+                    className={`arena-2d-toggle ${is2DMode ? 'active' : ''}`}
+                    onClick={onToggleArena2D}
+                    title="Prebaci prikaz table između 3D i 2D (Prečica: 2)"
+                  >
+                    {is2DMode ? '🏰 3D' : '⬚ 2D'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {arenaMode === 'survival' ? (
+              <div className="arena-survival-2d-bar">
+                <span className="arena-solved-pill">Rešeno ukupno: {arenaStats.solvedCount}</span>
+                <button
+                  type="button"
+                  id="btn-arena-toggle-2d"
+                  className={`arena-2d-toggle ${is2DMode ? 'active' : ''}`}
+                  onClick={onToggleArena2D}
+                  title="Prebaci prikaz table između 3D i 2D (Prečica: 2)"
+                >
+                  {is2DMode ? '🏰 3D' : '⬚ 2D'}
+                </button>
+              </div>
+            ) : null}
+
+            <div className="arena-mode-tabs" role="tablist" aria-label="Režim Taktičke arene">
+              {ARENA_MODES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="tab"
+                  id={`tab-arena-mode-${m.id}`}
+                  aria-selected={arenaMode === m.id}
+                  className={`arena-mode-tab ${arenaMode === m.id ? 'active' : ''}`}
+                  onClick={() => onChangeArenaMode(m.id)}
+                  title={m.shortDesc}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            {arenaMode === 'theme' ? (
+              <div className="arena-theme-picker">
+                <label className="academy-tutorial-label" htmlFor="select-arena-theme">
+                  Taktički motiv
+                </label>
+                <select
+                  id="select-arena-theme"
+                  className="arena-theme-select"
+                  value={arenaTheme}
+                  onChange={(e) => onChangeArenaTheme(e.target.value as TacticThemeFilter)}
+                >
+                  <option value="all">Sve teme</option>
+                  {TACTIC_THEMES.filter((t) => t.id !== 'all').map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.icon} {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            {arenaMode === 'daily' ? (
+              <div className="arena-daily-banner">
+                <span className="arena-daily-badge">
+                  {arenaDailyLoading
+                    ? '⏳ Učitavanje Lichess dnevnog izazova...'
+                    : arenaDailyStatus === 'rate-limited'
+                      ? '⚠ Lichess API pauza · Rezervni dnevni zadatak'
+                      : arenaDailyStatus === 'offline'
+                        ? '📡 Offline · Lokalni dnevni zadatak'
+                        : '🌐 Lichess Dnevni Izazov'}
+                </span>
+              </div>
+            ) : null}
+
+            {arenaPuzzle ? (
+              <>
+                <div className="academy-puzzle-heading arena-puzzle-heading">
+                  <div className="arena-puzzle-tags">
+                    <span className="academy-tag">
+                      {arenaPuzzle.themes.map((t) => getTacticThemeLabel(t)).join(' · ')}
+                    </span>
+                    <span className="arena-puzzle-rating">Elo {arenaPuzzle.rating}</span>
+                  </div>
+                  <h2>{arenaPuzzle.title}</h2>
+                  <p>
+                    {arenaTotalPlayerMoves > 1
+                      ? `Kombinacija u ${arenaTotalPlayerMoves} poteza (${arenaPuzzle.turn === 'w' ? 'Beli' : 'Crni'} vuče).`
+                      : `Jednopotezni taktički udar (${arenaPuzzle.turn === 'w' ? 'Beli' : 'Crni'} vuče).`}
+                  </p>
+                </div>
+
+                <div className="arena-move-progress">
+                  <span>
+                    {arenaFeedback === 'solved'
+                      ? `Kombinacija završena (${arenaTotalPlayerMoves}/${arenaTotalPlayerMoves})`
+                      : `Korak ${arenaCurrentPlayerStep} / ${arenaTotalPlayerMoves} · ${
+                          arenaPuzzle.turn === 'w' ? 'Beli' : 'Crni'
+                        } na potezu`}
+                  </span>
+                  <div className="arena-step-dots" aria-hidden="true">
+                    {Array.from({ length: Math.max(1, arenaTotalPlayerMoves) }).map((_, idx) => {
+                      const done =
+                        arenaFeedback === 'solved' ? true : idx < arenaSolvedPlayerSteps;
+                      const active =
+                        arenaFeedback !== 'solved' && idx === arenaSolvedPlayerSteps;
+                      return (
+                        <span
+                          key={idx}
+                          className={`arena-step-dot ${done ? 'done' : active ? 'active' : ''}`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {arenaFeedback === 'gameover' ? (
+                  <div className="academy-feedback retry" role="status" aria-live="polite">
+                    <strong>🔥 Kraj Survival serije!</strong>
+                    <p>
+                      Izgubio si sva 3 života. Rešeno zagonetki u seriji: <strong>{arenaStreak}</strong> (rekord: {arenaStats.bestSurvivalStreak}).
+                    </p>
+                  </div>
+                ) : arenaFeedback === 'solved' ? (
+                  <div className="academy-feedback success" role="status" aria-live="polite">
+                    <strong>
+                      Odlično! Kombinacija rešena
+                      {arenaRatingDelta !== null && arenaRatingDelta > 0 ? ` (+${arenaRatingDelta} Elo)` : ''}.
+                    </strong>
+                    <p>{arenaPuzzle.explanation}</p>
+                  </div>
+                ) : arenaFeedback === 'replying' ? (
+                  <div className="academy-feedback neutral" role="status" aria-live="polite">
+                    <strong>Tačan potez! ✓</strong>
+                    <p>Protivnik povlači odgovor — pripremi nastavak kombinacije.</p>
+                  </div>
+                ) : arenaFeedback === 'wrong' ? (
+                  <div className="academy-feedback retry" role="status" aria-live="polite">
+                    <strong>Taj potez nije najjači.</strong>
+                    <p>Pozicija je vraćena na prethodni korak — pronađi precizniji taktički udar.</p>
+                  </div>
+                ) : (
+                  <div className="academy-feedback neutral" role="status">
+                    <strong>Na potezu su {arenaPuzzle.turn === 'w' ? 'beli' : 'crni'}.</strong>
+                    <p>
+                      {arenaTotalPlayerMoves > 1
+                        ? `Pronađi dobitnu kombinaciju od ${arenaTotalPlayerMoves} poteza na tabli.`
+                        : 'Pronađi najjači potez direktno na 3D ili 2D tabli.'}
+                    </p>
+                  </div>
+                )}
+
+                {arenaHintCount > 0 && arenaPuzzle.hints.length > 0 ? (
+                  <div className="academy-hint" role="status" aria-live="polite">
+                    <strong>
+                      Nagoveštaj {arenaHintCount} / {arenaPuzzle.hints.length}
+                    </strong>
+                    <p>{arenaPuzzle.hints[Math.min(arenaHintCount - 1, arenaPuzzle.hints.length - 1)]}</p>
+                  </div>
+                ) : null}
+
+                <div className="academy-actions">
+                  <button
+                    type="button"
+                    id="btn-arena-hint"
+                    className="academy-secondary-button"
+                    onClick={onArenaShowHint}
+                    disabled={
+                      arenaHintCount >= arenaPuzzle.hints.length ||
+                      arenaFeedback === 'solved' ||
+                      arenaFeedback === 'gameover'
+                    }
+                  >
+                    💡 {arenaHintCount >= arenaPuzzle.hints.length ? 'Svi nagoveštaji' : 'Nagoveštaj'}
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-arena-retry"
+                    className="academy-secondary-button"
+                    onClick={onArenaRetry}
+                    disabled={arenaFeedback === 'replying'}
+                  >
+                    {arenaFeedback === 'gameover' ? '🔥 Nova serija' : '↺ Od početka'}
+                  </button>
+                  {arenaMode !== 'daily' && arenaFeedback !== 'gameover' ? (
+                    <button
+                      type="button"
+                      id="btn-arena-next"
+                      className="academy-primary-compact"
+                      onClick={onArenaNext}
+                      disabled={arenaFeedback === 'replying'}
+                    >
+                      {arenaFeedback === 'solved' ? 'Sledeći izazov →' : 'Preskoči →'}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    id="btn-arena-back"
+                    className="academy-secondary-button"
+                    onClick={onLeaveArena}
+                  >
+                    ← Akademija
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="academy-feedback neutral" role="status">
+                <strong>Priprema zadatka...</strong>
+                <p>Učitavam sledeću taktičku poziciju.</p>
+              </div>
+            )}
           </div>
         ) : view === 'tutorial' ? (
           <div className="academy-tutorial-content">
@@ -1178,8 +1510,64 @@ export function Academy({
               Uči kroz kratke izazove i interaktivne 3D poteze na tabli. Pogrešan pokušaj je deo vežbe — tvoja partija ostaje sačuvana.
             </p>
             <div className="academy-progress-summary">
-              Završeno: {academyProgression.getTotalCompleted()} aktivnosti
+              Završeno: {academyProgression.getTotalCompleted()} aktivnosti · Taktički Elo: {arenaStats.rating}
             </div>
+
+            <section className="academy-arena-feature" aria-labelledby="academy-arena-heading">
+              <div className="academy-mentor-header">
+                <div>
+                  <p className="academy-eyebrow">VIŠEPOTEZNA TAKTIKA &amp; ELO</p>
+                  <h2 id="academy-arena-heading">⚡ Taktička arena</h2>
+                </div>
+                <div className="academy-arena-badges">
+                  <span className="academy-arena-elo-chip">Elo {arenaStats.rating}</span>
+                  {arenaStats.bestSurvivalStreak > 0 ? (
+                    <span className="academy-arena-streak-chip">🔥 {arenaStats.bestSurvivalStreak}</span>
+                  ) : null}
+                </div>
+              </div>
+              <p className="academy-mentor-desc">
+                Rešavaj višepotezne kombinacije (mat u 2 i 3, viljuške, vezivanja, žrtve) sa automatskim odgovorom protivnika u 3D i 2D prikazu, adaptivnim Elo rejtingom, Survival serijom i Lichess dnevnim izazovom.
+              </p>
+              <div className="academy-arena-launch-grid">
+                <button
+                  type="button"
+                  id="btn-open-tactics-arena"
+                  className="academy-arena-primary-btn"
+                  onClick={() => onOpenArena('elo')}
+                >
+                  <strong>📈 Elo trening</strong>
+                  <span>Adaptivne zagonetke</span>
+                </button>
+                <button
+                  type="button"
+                  id="btn-open-arena-survival"
+                  className="academy-arena-mode-btn"
+                  onClick={() => onOpenArena('survival')}
+                >
+                  <strong>🔥 Survival (3 ❤)</strong>
+                  <span>Rekord: {arenaStats.bestSurvivalStreak}</span>
+                </button>
+                <button
+                  type="button"
+                  id="btn-open-arena-theme"
+                  className="academy-arena-mode-btn"
+                  onClick={() => onOpenArena('theme', 'mate2')}
+                >
+                  <strong>🎯 Po temi</strong>
+                  <span>8 taktičkih motiva</span>
+                </button>
+                <button
+                  type="button"
+                  id="btn-open-arena-daily"
+                  className="academy-arena-mode-btn"
+                  onClick={() => onOpenArena('daily')}
+                >
+                  <strong>📅 Dnevni izazov</strong>
+                  <span>Lichess uživo</span>
+                </button>
+              </div>
+            </section>
 
             <section className="academy-mentor-feature" aria-labelledby="academy-mentor-heading">
               <div className="academy-mentor-header">

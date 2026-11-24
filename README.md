@@ -19,11 +19,12 @@
   - Izbor praćene strane (*Beli*, *Crni* ili *Oba*), promena ko je na potezu, unos/kopiranje **FEN** pozicije i **prepoznavanje slike table (`📷 Slika pozicije` ili `Ctrl+V`)** pomoću multimodalnog Gemini servisa (`/api/gemini/board-from-image`).
   - Potezi u Režimu Analize ne dodeljuju XP niti ulaze u istoriju mečeva.
 - **Tri AI komentatora na srpskom jeziku:** Alistair (*Mudri Arhimag*), Grix (*Goblin Roastmaster*) i Valerius (*Gordi Vitez*), sa unapred generisanim MP3 glasovnim replikama, proceduralnim Web Audio zvučnim efektima i opcionim Google Gemini serverskim posrednikom.
-- **Šahovska akademija i 3D Tutorijal:**
-  - **Taktičke vežbe i kvizovi:** 12 mat-u-jednom zagonetki sa tri postepena nagoveštaja i 36 lekcija raspoređenih u oblasti *Poznate partije*, *Otvaranja* i *Strategija*.
+- **Šahovska akademija, Taktička arena i 3D Tutorijal:**
+  - **⚡ Taktička arena (3D i 2D):** višepotezne taktičke kombinacije (*Mat u 1*, *Mat u 2*, *Mat u 3*, *Viljuška*, *Vezivanje*, *Ražanj*, *Otkriveni napad*, *Žrtva i odvlačenje*) sa automatskim odgovorom protivnika na tabli, adaptivnim **Taktičkim Elo** rejtingom (`📈 Elo trening`), **Survival** režimom sa 3 života (`🔥 Survival`), filtriranjem **po temi** (`🎯 Po temi`) i **Lichess dnevnim izazovom** (`📅 Dnevni izazov`, uz lokalni fallback kada je mreža nedostupna). Uključuje trenutni preklopnik `⬚ 2D` / `🏰 3D` (prečica `2`) dok je panel Arene otvoren.
+  - **Klasične zagonetke i kvizovi:** 12 mat-u-jednom zagonetki sa tri postepena nagoveštaja i 36 lekcija raspoređenih u oblasti *Poznate partije*, *Otvaranja* i *Strategija*.
   - **3D Tutorijal (30 kuriranih lekcija):** animirano izvođenje poteza korak po korak u kategorijama *Otvaranja*, *Odbrana* i *Poznate partije*, sa opcijom **„⚔ Igraj odavde“** za nastavak partije protiv AI-ja iz bilo kog trenutka lekcije.
 - **Eksterne šahovske integracije i PGN uvoz/izvoz:**
-  - **Lichess Masters API (uživo):** statistika najčešćih velemajstorskih poteza (W/D/L traka) za trenutnu poziciju i pregled *Master partija* u 3D Tutorijalu jednim klikom.
+  - **Lichess Masters API & Daily Puzzle (uživo):** statistika najčešćih velemajstorskih poteza (W/D/L traka), pregled *Master partija* u 3D Tutorijalu jednim klikom i dnevna taktička zagonetka u *Taktičkoj areni*.
   - **Uvoz sa Lichess-a i Chess.com-a:** unos direktnog linka ka Lichess partiji ili studiji/poglavlju, kao i pretraga poslednjih partija po korisničkom imenu na Lichess-u i Chess.com-u.
   - **Lokalni PGN uvoz i izvoz:** učitavanje `.pgn` fajla sa diska ili lepljenje teksta (sačuvano u `localStorage` pod *Uvezene*), kao i preuzimanje sopstvenih partija u `.pgn` formatu (`⬇ PGN` u HUD-u i `Preuzmi PGN` po završetku partije).
 - **Online 2-igrača duel i korisnički nalozi:**

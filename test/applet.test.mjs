@@ -1450,3 +1450,184 @@ test('HUD reorganization places 2D toggle in brand pill, Online next to Account 
   assert.ok(cssSrc.includes('.hud-account-online-group'));
   assert.ok(cssSrc.includes('.piece-set-popover'));
 });
+
+test('Taktička arena catalog verifies every curated and classic puzzle FEN and multi-move UCI sequence via chessRules', async () => {
+  const {
+    CURATED_MULTI_MOVE_PUZZLES,
+    getAllArenaPuzzles,
+    TACTIC_THEMES,
+  } = await import('../src/data/tacticsArenaCatalog.ts');
+  const { parseFenPosition, parseUciMove, applyChessMove } = await import('../src/shared/chessRules.ts');
+
+  const allPuzzles = getAllArenaPuzzles();
+  assert.equal(CURATED_MULTI_MOVE_PUZZLES.length, 27);
+  assert.equal(allPuzzles.length, 39);
+  assert.equal(new Set(allPuzzles.map((p) => p.id)).size, allPuzzles.length);
+  assert.equal(TACTIC_THEMES.length, 9);
+
+  for (const puzzle of allPuzzles) {
+    let state = parseFenPosition(puzzle.fen);
+    assert.ok(state, `Puzzle ${puzzle.id} FEN must parse cleanly`);
+    assert.equal(state.currentTurn, puzzle.turn, `Puzzle ${puzzle.id} turn mismatch`);
+
+    for (let i = 0; i < puzzle.solutionUci.length; i += 1) {
+      const moveObj = parseUciMove(puzzle.solutionUci[i]);
+      assert.ok(moveObj, `Puzzle ${puzzle.id} invalid UCI move at ${i}: ${puzzle.solutionUci[i]}`);
+      const res = applyChessMove(state, moveObj.fromR, moveObj.fromC, moveObj.toR, moveObj.toC, moveObj.promotion);
+      assert.equal(res.ok, true, `Puzzle ${puzzle.id} illegal move ${puzzle.solutionUci[i]} at ply ${i}: ${res.error}`);
+      state = res.state;
+    }
+
+    if (
+      puzzle.themes.includes('mate1') ||
+      puzzle.themes.includes('mate2') ||
+      puzzle.themes.includes('mate3')
+    ) {
+      assert.equal(state.isCheckmate, true, `Mate puzzle ${puzzle.id} must terminate in checkmate`);
+    }
+  }
+});
+
+test('Lichess Daily Puzzle service replays PGN, caches by UTC date, respects 429 cooldown, and falls back offline', async () => {
+  const {
+    parseLichessDailyPuzzleResponse,
+    fetchDailyLichessPuzzle,
+    clearDailyLichessPuzzleCache,
+  } = await import('../src/services/lichessPuzzleService.ts');
+
+  clearDailyLichessPuzzleCache();
+
+  // Sample PGN after 1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 (black just moved 5... Be7 => initialPly 9, white plays Re1)
+  const sampleDaily = {
+    game: {
+      id: 'dailyTest1',
+      pgn: '1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7',
+    },
+    puzzle: {
+      id: 'pzXYZ',
+      rating: 1620,
+      plays: 4200,
+      initialPly: 9,
+      solution: ['f1e1', 'b7b5', 'a4b3'],
+      themes: ['pin', 'advantage'],
+    },
+  };
+
+  const parsed = parseLichessDailyPuzzleResponse(sampleDaily, '2026-11-24');
+  assert.ok(parsed);
+  assert.equal(parsed.status, 'ready');
+  assert.equal(parsed.puzzle.rating, 1620);
+  assert.equal(parsed.puzzle.turn, 'w');
+  assert.deepEqual(parsed.puzzle.solutionUci, ['f1e1', 'b7b5', 'a4b3']);
+  assert.ok(parsed.puzzle.themes.includes('pin'));
+
+  let fetchCalls = 0;
+  const fixedNow = Date.UTC(2026, 10, 24, 10, 0, 0);
+  const firstFetch = await fetchDailyLichessPuzzle({
+    nowMs: () => fixedNow,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify(sampleDaily), { status: 200 });
+    },
+  });
+  assert.equal(firstFetch.status, 'ready');
+  assert.equal(fetchCalls, 1);
+
+  // Cached hit on same UTC date must not re-fetch
+  const secondFetch = await fetchDailyLichessPuzzle({
+    nowMs: () => fixedNow + 5000,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('Should use cached daily puzzle');
+    },
+  });
+  assert.equal(secondFetch.puzzle.id, firstFetch.puzzle.id);
+  assert.equal(fetchCalls, 1);
+
+  // 429 cooldown returns rate-limited fallback immediately without hammering endpoint
+  clearDailyLichessPuzzleCache();
+  let limitedCalls = 0;
+  const rateRes1 = await fetchDailyLichessPuzzle({
+    nowMs: () => fixedNow,
+    fetchImpl: async () => {
+      limitedCalls += 1;
+      return new Response('{}', { status: 429 });
+    },
+  });
+  assert.equal(rateRes1.status, 'rate-limited');
+  assert.ok(rateRes1.puzzle.fen.length > 10);
+
+  const rateRes2 = await fetchDailyLichessPuzzle({
+    nowMs: () => fixedNow + 10_000,
+    fetchImpl: async () => {
+      limitedCalls += 1;
+      return new Response(JSON.stringify(sampleDaily), { status: 200 });
+    },
+  });
+  assert.equal(rateRes2.status, 'rate-limited');
+  assert.equal(limitedCalls, 1, '429 cooldown must prevent immediate retry');
+
+  // Offline error falls back cleanly
+  clearDailyLichessPuzzleCache();
+  const offlineRes = await fetchDailyLichessPuzzle({
+    nowMs: () => fixedNow,
+    fetchImpl: async () => {
+      throw new Error('Network error');
+    },
+  });
+  assert.equal(offlineRes.status, 'offline');
+  assert.ok(offlineRes.puzzle.solutionUci.length >= 1);
+  clearDailyLichessPuzzleCache();
+});
+
+test('Taktička arena Elo, Survival selection, and 2D/3D UI & engine wiring are complete', async () => {
+  const {
+    calculateEloDelta,
+    getNextArenaPuzzle,
+    tacticsArenaService,
+    DEFAULT_TACTICAL_RATING,
+  } = await import('../src/services/tacticsArenaService.ts');
+
+  tacticsArenaService.resetCacheForTests();
+  const initialStats = tacticsArenaService.getStats();
+  assert.equal(initialStats.rating, DEFAULT_TACTICAL_RATING);
+
+  const winDelta = calculateEloDelta(1200, 1400, 'clean');
+  const lossDelta = calculateEloDelta(1200, 1200, 'mistake');
+  assert.ok(winDelta >= 15, 'Solving stronger tactic cleanly should award significant Elo');
+  assert.ok(lossDelta <= -10, 'Mistake at equal Elo should deduct rating');
+
+  const eloPick = getNextArenaPuzzle('elo', { playerRating: 1350 });
+  assert.ok(eloPick);
+  const survivalEarly = getNextArenaPuzzle('survival', { survivalStreak: 0 });
+  const survivalDeep = getNextArenaPuzzle('survival', { survivalStreak: 12 });
+  assert.ok(survivalDeep.rating > survivalEarly.rating, 'Survival mode must escalate puzzle difficulty with streak');
+
+  const forkPick = getNextArenaPuzzle('theme', { theme: 'fork' });
+  assert.ok(forkPick.themes.includes('fork'));
+
+  // Verify wiring across Academy, App, Classic2DBoard, Engine, and CSS
+  const academySrc = fs.readFileSync(path.join(ROOT, 'src/components/Academy.tsx'), 'utf-8');
+  const appSrc = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const board2dSrc = fs.readFileSync(path.join(ROOT, 'src/components/Classic2DBoard.tsx'), 'utf-8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const cssSrc = fs.readFileSync(path.join(ROOT, 'src/styles.css'), 'utf-8');
+
+  assert.ok(academySrc.includes('id="btn-open-tactics-arena"'));
+  assert.ok(academySrc.includes('id="tactics-arena-panel"'));
+  assert.ok(academySrc.includes('id="btn-arena-toggle-2d"'));
+  assert.ok(academySrc.includes('⚡ Taktička arena'));
+  assert.ok(!academySrc.includes('Tactic Trainer'));
+  assert.ok(appSrc.includes('handleOpenTacticsArena'));
+  assert.ok(appSrc.includes('arenaStepFenRef'));
+  assert.ok(appSrc.includes('academy-2d-open'));
+  assert.ok(board2dSrc.includes('isTacticsMode = false'));
+  assert.ok(board2dSrc.includes("window.addEventListener('wizardchess:academy-move'"));
+  assert.ok(board2dSrc.includes('if (gameOver || currentTurn !== playerColor) return;'));
+  assert.ok(engineSrc.includes('function enterTacticsPuzzle('));
+  assert.ok(engineSrc.includes('function executeTacticsMove('));
+  assert.ok(engineSrc.includes('academyTacticsMode'));
+  assert.ok(cssSrc.includes('.academy-arena-feature'));
+  assert.ok(cssSrc.includes('body.academy-2d-open .chess-2d-backdrop'));
+});
+

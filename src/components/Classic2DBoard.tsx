@@ -23,6 +23,8 @@ interface Props {
   isOnlineMode?: boolean;
   isAnalysisMode?: boolean;
   isEditorMode?: boolean;
+  isTacticsMode?: boolean;
+  tacticsTitle?: string;
   evalState?: StockfishEval | null;
   isEvaluating?: boolean;
   hintMessage?: string;
@@ -103,6 +105,8 @@ export const Classic2DBoard: React.FC<Props> = ({
   isOnlineMode = false,
   isAnalysisMode = false,
   isEditorMode = false,
+  isTacticsMode = false,
+  tacticsTitle,
   evalState = null,
   isEvaluating = false,
   hintMessage,
@@ -204,6 +208,8 @@ export const Classic2DBoard: React.FC<Props> = ({
     };
 
     window.addEventListener('wizardchess:move', handleSync);
+    window.addEventListener('wizardchess:academy-move', handleSync);
+    window.addEventListener('wizardchess:academy-position', handleSync);
     window.addEventListener('wizardchess:reset', handleSync);
     window.addEventListener('wizardchess:undo', handleSync);
     window.addEventListener('wizardchess:side-changed', handleSync);
@@ -213,6 +219,8 @@ export const Classic2DBoard: React.FC<Props> = ({
 
     return () => {
       window.removeEventListener('wizardchess:move', handleSync);
+      window.removeEventListener('wizardchess:academy-move', handleSync);
+      window.removeEventListener('wizardchess:academy-position', handleSync);
       window.removeEventListener('wizardchess:reset', handleSync);
       window.removeEventListener('wizardchess:undo', handleSync);
       window.removeEventListener('wizardchess:side-changed', handleSync);
@@ -502,9 +510,11 @@ export const Classic2DBoard: React.FC<Props> = ({
         {/* Top bar */}
         <div className="chess-2d-header">
           <div className="chess-2d-title-group">
-            <span className="chess-2d-badge">{isEditorMode ? 'EDITOR TABLE' : '2D KLASIK'}</span>
+            <span className="chess-2d-badge">
+              {isEditorMode ? 'EDITOR TABLE' : isTacticsMode ? '⚡ TAKTIČKA ARENA' : '2D KLASIK'}
+            </span>
             <h2 className="chess-2d-title">
-              {isEditorMode ? 'Postavi poziciju' : 'Šahovska tabla'}
+              {isEditorMode ? 'Postavi poziciju' : isTacticsMode ? (tacticsTitle || 'Taktički izazov') : 'Šahovska tabla'}
             </h2>
           </div>
           <div className="chess-2d-status-bar">
@@ -523,7 +533,7 @@ export const Classic2DBoard: React.FC<Props> = ({
             {!isEditorMode && isDraw && <span className="chess-2d-alert-draw">{drawLabel}</span>}
           </div>
           <div className="chess-2d-header-actions">
-            {!isOnlineMode && !isEditorMode && (
+            {!isOnlineMode && !isEditorMode && !isTacticsMode && (
               <>
                 <button
                   type="button"
@@ -611,7 +621,7 @@ export const Classic2DBoard: React.FC<Props> = ({
             >
               ⮀ Okreni
             </button>
-            {!isOnlineMode && !isEditorMode && (
+            {!isOnlineMode && !isEditorMode && !isTacticsMode && (
               <button
                 type="button"
                 className="chess-2d-btn"
@@ -836,7 +846,7 @@ export const Classic2DBoard: React.FC<Props> = ({
 
         {/* Board wrapper with EvalBar + ranks & files coordinates */}
         <div className="chess-2d-board-wrapper">
-          {!isOnlineMode && !isEditorMode && (
+          {!isOnlineMode && !isEditorMode && !isTacticsMode && (
             <EvalBar
               evalState={evalState}
               flipped={isViewFlipped}
@@ -916,6 +926,10 @@ export const Classic2DBoard: React.FC<Props> = ({
           {isEditorMode ? (
             <span>
               ✎ <strong>Editor table:</strong> Izaberi figuru iz palete pa klikni na polje (isti klik briše), koristi <strong>✋ Pomeri</strong> za premeštanje ili <strong>desni klik</strong> za brisanje.
+            </span>
+          ) : isTacticsMode ? (
+            <span>
+              ⚡ <strong>Taktička arena (2D):</strong> Odigraj najbolji potez na 2D tabli. Koristi levi panel za nagoveštaj, režime ili povratak u <strong>3D</strong>.
             </span>
           ) : !isOnlineMode && hintCoords && hintMessage ? (
             <span className="chess-2d-active-hint">{hintMessage}</span>

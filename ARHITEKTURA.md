@@ -17,7 +17,7 @@ index.html
             │    (AIBubble, AnalysisPanel, Academy, AccountModal, OnlineDuelModal, OnlineMatchBar, EvalBar, Classic2DBoard + Editor table)
             ├── stockfishService ── Web Worker (public/stockfish/stockfish-19-lite-single.*)
             ├── authService & multiplayerService ── REST API (/api/auth, /api/profile) & WebSocket (/ws)
-            ├── pgnService, lichessExplorerService & onlineChessImportService
+            ├── pgnService, lichessExplorerService, lichessPuzzleService, tacticsArenaService & onlineChessImportService
             ├── geminiService ── serverski proxy (/api/gemini/*) / lokalni fallback + slika u FEN
             ├── progressionService & academyProgression ── localStorage + sinhronizacija sa nalogom
             ├── sceneThemes, sceneEnvironments, opponentHolograms & outdoorParkEnv ── Three.js ambijenti
@@ -338,9 +338,12 @@ classDiagram
     }
 
     class Academy {
-        +view: "home" | "puzzle" | "tutorial"
+        +view: "home" | "puzzle" | "tutorial" | "arena"
+        +arenaMode: "elo" | "survival" | "theme" | "daily"
         +importTab: "masters" | "online" | "file"
         +customLessons: ChessAcademyLesson[]
+        +onOpenArena(mode, theme)
+        +onToggleArena2D()
         +onPlayTutorialStep()
         +onTakeOverTutorial()
         +onImportPgn(pgnText)
@@ -662,6 +665,9 @@ sequenceDiagram
 | [src/services/pgnService.ts](./src/services/pgnService.ts) | Parsiranje PGN zapisa (`chess.js`) u 3D Tutorijal lekcije, uklanjanje `[%clk]`/`[%eval]` tagova, rekonstrukcija FEN-a po koracima, lokalno čuvanje i izvoz partija u PGN. |
 | [src/services/lichessExplorerService.ts](./src/services/lichessExplorerService.ts) | Upiti ka `explorer.lichess.ovh/masters` sa keširanjem, računanjem W/D/L procenata, listom `topGames`, preuzimanjem master PGN partija i 60s zaštitom na HTTP `429`. |
 | [src/services/onlineChessImportService.ts](./src/services/onlineChessImportService.ts) | Parsiranje Lichess URL-ova (partije, studije, poglavlja uz fallback na Masters PGN), preuzimanje Lichess NDJSON partija igrača i Chess.com mesečnih arhiva. |
+| [src/data/tacticsArenaCatalog.ts](./src/data/tacticsArenaCatalog.ts) | Banka od 39 proverenih zagonetki (27 kuriranih višepoteznih kombinacija za 8 motiva + 12 klasičnih *Mat u 1*) za **Taktičku arenu**. |
+| [src/services/tacticsArenaService.ts](./src/services/tacticsArenaService.ts) | Adaptivni Taktički Elo (`localStorage`), izbor zadataka po Elo rejtingu / Survival nizu / temi i evidencija rekorda. |
+| [src/services/lichessPuzzleService.ts](./src/services/lichessPuzzleService.ts) | Preuzimanje `lichess.org/api/puzzle/daily` uz `chess.js` PGN verifikaciju rešenja, UTC dnevni keš, `429` pauzu i deterministički lokalni fallback. |
 | [src/data/chessAcademyLessons.ts](./src/data/chessAcademyLessons.ts) | 30 kuriranih lekcija za 3D Tutorijal (*Otvaranja*, *Odbrana*, *Poznate partije*). |
 | [src/services/academyCatalog.ts](./src/services/academyCatalog.ts) | Po 12 kviz-lekcija u oblastima *Poznate partije*, *Otvaranja* i *Strategija*. |
 | [src/services/puzzleCatalog.ts](./src/services/puzzleCatalog.ts) | 12 proverenih mat-u-jednom zagonetki sa pozicijama i po 3 nagoveštaja. |
@@ -689,7 +695,7 @@ sequenceDiagram
 
 - **Ambijenti (`setAmbienceMode('cathedral' | 'park')`):** U `park` režimu učitava se proceduralni trg iz `outdoorParkEnv.ts` sa kamenom tablom u ravni pločnika, dok su 3D hologram protivnika i glasovni komentari skriveni/utišani (`voiceService.setAmbienceMuted(true)`). Promena ambijenta i seta figura ne resetuje partiju.
 - **Setovi figura (`setPieceSet(...)`):** Podržani su `klasicni` (podrazumevani set za nove korisnike), `wizard`, `ancient`, `dragon`, `medieval`, `vitez` i `srpski`. Dodatni GLB setovi (`vitez`, `srpski`, odnosno `klasicni` ako korisnik ima sačuvan drugi set) dekompresuju se iz `public/assets/glb/` tek kada su potrebni.
-- **Akademija i 3D Tutorijal:** Ulazak u zagonetku ili 3D tutorijal snima stanje tekuće single-player partije. Korisnik može da uvozi partije iz Lichess Masters baze, Lichess/Chess.com linkova i profila ili lokalnih `.pgn` fajlova i da nastavi bilo koju poziciju protiv AI-ja pomoću `takeOverAcademyGame(...)`.
+- **Akademija, Taktička arena i 3D Tutorijal:** Ulazak u zagonetku, Taktičku arenu ili 3D tutorijal snima stanje tekuće single-player partije. U **Taktičkoj areni**, `App.tsx` prati sekvencu `solutionUci` korak po korak (uključujući i alternativni trenutni šah-mat), automatski odigrava odgovor protivnika preko `window.wizardChess.executeTacticsMove(...)` i vraća poziciju pri grešci uz podršku za `3D` i `2D` tablu (`body.academy-2d-open`). Korisnik može i da uvozi partije iz Lichess Masters baze, Lichess/Chess.com linkova i profila ili lokalnih `.pgn` fajlova i da nastavi bilo koju poziciju protiv AI-ja pomoću `takeOverAcademyGame(...)`.
 
 ### Onlajn 1-na-1 dueli i korisnički nalozi
 

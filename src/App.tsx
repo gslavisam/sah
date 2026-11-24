@@ -26,6 +26,16 @@ import type { SceneThemeId } from './services/sceneThemes';
 import type { OnlinePersonaId, PreferredSide, TimeControlId } from './shared/multiplayerTypes';
 import { PUZZLES, type AcademyPiece } from './services/puzzleCatalog';
 import { academyProgression } from './services/academyProgression';
+import type {
+  TacticPuzzle,
+  TacticThemeFilter,
+} from './data/tacticsArenaCatalog';
+import { fetchDailyLichessPuzzle } from './services/lichessPuzzleService';
+import {
+  getNextArenaPuzzle,
+  tacticsArenaService,
+  type ArenaTrainingMode,
+} from './services/tacticsArenaService';
 import {
   CHESS_ACADEMY_LESSONS,
   type AcademyCategory,
@@ -205,11 +215,48 @@ export default function App() {
   const [academyVisible, setAcademyVisible] = useState(false);
   const academyVisibleRef = useRef(academyVisible);
   academyVisibleRef.current = academyVisible;
-  const [academyView, setAcademyView] = useState<'home' | 'puzzle' | 'tutorial'>('home');
+  const [academyView, setAcademyView] = useState<'home' | 'puzzle' | 'tutorial' | 'arena'>('home');
+  const academyViewRef = useRef(academyView);
+  academyViewRef.current = academyView;
   const [academyPuzzleId, setAcademyPuzzleId] = useState<string | null>(null);
   const [academyFeedback, setAcademyFeedback] = useState<'idle' | 'wrong' | 'solved'>('idle');
   const [academyHintCount, setAcademyHintCount] = useState(0);
   const [academyError, setAcademyError] = useState<string | null>(null);
+  const [arenaMode, setArenaMode] = useState<ArenaTrainingMode>('elo');
+  const arenaModeRef = useRef<ArenaTrainingMode>(arenaMode);
+  arenaModeRef.current = arenaMode;
+  const [arenaTheme, setArenaTheme] = useState<TacticThemeFilter>('all');
+  const arenaThemeRef = useRef<TacticThemeFilter>(arenaTheme);
+  arenaThemeRef.current = arenaTheme;
+  const [activeArenaPuzzle, setActiveArenaPuzzle] = useState<TacticPuzzle | null>(null);
+  const activeArenaPuzzleRef = useRef<TacticPuzzle | null>(activeArenaPuzzle);
+  activeArenaPuzzleRef.current = activeArenaPuzzle;
+  const [arenaMoveIndex, setArenaMoveIndex] = useState(0);
+  const arenaMoveIndexRef = useRef(0);
+  arenaMoveIndexRef.current = arenaMoveIndex;
+  const arenaStepFenRef = useRef<string>(DEFAULT_START_FEN);
+  const [arenaFeedback, setArenaFeedback] = useState<'idle' | 'replying' | 'wrong' | 'solved' | 'gameover'>('idle');
+  const arenaFeedbackRef = useRef(arenaFeedback);
+  arenaFeedbackRef.current = arenaFeedback;
+  const [arenaLives, setArenaLives] = useState(3);
+  const arenaLivesRef = useRef(3);
+  arenaLivesRef.current = arenaLives;
+  const [arenaStreak, setArenaStreak] = useState(0);
+  const arenaStreakRef = useRef(0);
+  arenaStreakRef.current = arenaStreak;
+  const arenaSeenIdsRef = useRef<string[]>([]);
+  const [arenaHintCount, setArenaHintCount] = useState(0);
+  const arenaHintCountRef = useRef(0);
+  arenaHintCountRef.current = arenaHintCount;
+  const [arenaMistakeMade, setArenaMistakeMade] = useState(false);
+  const arenaMistakeMadeRef = useRef(false);
+  arenaMistakeMadeRef.current = arenaMistakeMade;
+  const [arenaRatingDelta, setArenaRatingDelta] = useState<number | null>(null);
+  const [arenaDailyLoading, setArenaDailyLoading] = useState(false);
+  const [arenaDailyStatus, setArenaDailyStatus] = useState<'idle' | 'ready' | 'rate-limited' | 'offline'>('idle');
+  const arenaReplyTimerRef = useRef<number | null>(null);
+  const arenaRevertTimerRef = useRef<number | null>(null);
+  const is2DModeRef = useRef(false);
   const [tutorialLessonId, setTutorialLessonId] = useState<string>(CHESS_ACADEMY_LESSONS[0].id);
   const tutorialLessonIdRef = useRef<string>(tutorialLessonId);
   tutorialLessonIdRef.current = tutorialLessonId;
@@ -227,6 +274,7 @@ export default function App() {
   customLessonsRef.current = customLessons;
   const [hasPlayedMoves, setHasPlayedMoves] = useState(false);
   const [is2DMode, setIs2DMode] = useState(false);
+  is2DModeRef.current = is2DMode;
   const [isBoardEditorOpen, setIsBoardEditorOpen] = useState(false);
   const editorReturnTo3DRef = useRef(false);
   const skipNextResetGuidedHintRef = useRef(false);
@@ -612,6 +660,14 @@ export default function App() {
     };
     win.wizardChess?.set2DModeActive?.(is2DMode);
   }, [is2DMode]);
+
+  useEffect(() => {
+    const isArena2D = academyVisible && academyView === 'arena' && is2DMode;
+    document.body.classList.toggle('academy-2d-open', isArena2D);
+    return () => {
+      document.body.classList.remove('academy-2d-open');
+    };
+  }, [academyVisible, academyView, is2DMode]);
 
   useEffect(() => {
     if (isOnlineMode) {
@@ -1040,15 +1096,40 @@ export default function App() {
     };
   }, []);
 
+  const clearArenaTimers = () => {
+    if (arenaReplyTimerRef.current !== null) {
+      window.clearTimeout(arenaReplyTimerRef.current);
+      arenaReplyTimerRef.current = null;
+    }
+    if (arenaRevertTimerRef.current !== null) {
+      window.clearTimeout(arenaRevertTimerRef.current);
+      arenaRevertTimerRef.current = null;
+    }
+  };
+
   useEffect(() => {
+    const promoToChar: Record<string, string> = {
+      queen: 'q',
+      rook: 'r',
+      bishop: 'b',
+      knight: 'n',
+    };
+
     const handleAcademyMove = (e: Event) => {
       const detail = (
         e as CustomEvent<{
           isCheckmate?: boolean;
           gameOver?: boolean;
           inCheck?: boolean;
-          move?: { capture?: boolean };
+          fen?: string;
+          move?: {
+            capture?: boolean;
+            fromSquare?: string;
+            toSquare?: string;
+            promotion?: string;
+          };
           tutorialStep?: boolean;
+          tacticsAutoReply?: boolean;
         }>
       ).detail;
 
@@ -1083,6 +1164,139 @@ export default function App() {
         return;
       }
 
+      if (academyViewRef.current === 'arena') {
+        const puzzle = activeArenaPuzzleRef.current;
+        if (!puzzle) return;
+
+        // Opponent automatic reply finished -> advance to next player turn
+        if (detail?.tacticsAutoReply) {
+          if (detail.fen) {
+            arenaStepFenRef.current = detail.fen;
+          }
+          setArenaMoveIndex((prev) => prev + 1);
+          setArenaFeedback('idle');
+          return;
+        }
+
+        if (arenaFeedbackRef.current === 'solved' || arenaFeedbackRef.current === 'gameover' || arenaFeedbackRef.current === 'replying') {
+          return;
+        }
+
+        const idx = arenaMoveIndexRef.current;
+        const expectedUci = (puzzle.solutionUci[idx] || '').toLowerCase();
+        const playedPromo = detail?.move?.promotion ? promoToChar[detail.move.promotion] || '' : '';
+        const playedUci = `${detail?.move?.fromSquare || ''}${detail?.move?.toSquare || ''}${playedPromo}`.toLowerCase();
+        const isExactMatch = Boolean(expectedUci && playedUci === expectedUci);
+        const isImmediateCheckmate = Boolean(detail?.isCheckmate);
+
+        if (isExactMatch || isImmediateCheckmate) {
+          const nextIndex = idx + 1;
+          const isSequenceDone = isImmediateCheckmate || nextIndex >= puzzle.solutionUci.length;
+
+          if (isSequenceDone) {
+            const cleanSolve = !arenaMistakeMadeRef.current && arenaHintCountRef.current === 0;
+            const nextStreak =
+              arenaModeRef.current === 'survival' ? arenaStreakRef.current + 1 : arenaStreakRef.current;
+            if (arenaModeRef.current === 'survival') {
+              setArenaStreak(nextStreak);
+              arenaSeenIdsRef.current = [...arenaSeenIdsRef.current, puzzle.id];
+            }
+            const { ratingDelta } = tacticsArenaService.recordPuzzleSolved({
+              puzzleId: puzzle.id,
+              puzzleRating: puzzle.rating,
+              cleanSolve,
+              mode: arenaModeRef.current,
+              survivalStreakAfter: arenaModeRef.current === 'survival' ? nextStreak : undefined,
+            });
+            setArenaMoveIndex(puzzle.solutionUci.length);
+            setArenaRatingDelta(ratingDelta);
+            setArenaFeedback('solved');
+            return;
+          }
+
+          // Advance past player's move and schedule opponent's reply
+          if (detail?.fen) {
+            arenaStepFenRef.current = detail.fen;
+          }
+          setArenaMoveIndex(nextIndex);
+          setArenaFeedback('replying');
+
+          const replyUci = (puzzle.solutionUci[nextIndex] || '').toLowerCase();
+          const promoMap: Record<string, PromotionPieceType> = {
+            q: 'queen',
+            r: 'rook',
+            b: 'bishop',
+            n: 'knight',
+          };
+          const replyPromo = replyUci[4] ? promoMap[replyUci[4]] : undefined;
+          clearArenaTimers();
+          arenaReplyTimerRef.current = window.setTimeout(() => {
+            arenaReplyTimerRef.current = null;
+            const win = window as Window & {
+              wizardChess?: {
+                executeTacticsMove?: (
+                  fromSquare: string,
+                  toSquare: string,
+                  promotion?: PromotionPieceType,
+                  options?: { isAutoReply?: boolean; instant?: boolean }
+                ) => boolean;
+              };
+            };
+            const moved = win.wizardChess?.executeTacticsMove?.(
+              replyUci.slice(0, 2),
+              replyUci.slice(2, 4),
+              replyPromo,
+              { isAutoReply: true, instant: is2DModeRef.current }
+            );
+            if (!moved) {
+              setArenaFeedback('idle');
+            }
+          }, is2DModeRef.current ? 260 : 480);
+          return;
+        }
+
+        // Wrong move
+        const isFirstMistakeOnPuzzle = !arenaMistakeMadeRef.current;
+        setArenaMistakeMade(true);
+        if (arenaModeRef.current === 'elo' || arenaModeRef.current === 'daily') {
+          if (isFirstMistakeOnPuzzle) {
+            const delta = tacticsArenaService.recordPuzzleMistake(puzzle.rating, true);
+            setArenaRatingDelta(delta);
+          }
+        } else if (arenaModeRef.current === 'survival') {
+          const remaining = Math.max(0, arenaLivesRef.current - 1);
+          setArenaLives(remaining);
+          if (remaining <= 0) {
+            tacticsArenaService.updateBestSurvivalStreak(arenaStreakRef.current);
+            setArenaFeedback('gameover');
+            return;
+          }
+        }
+
+        setArenaFeedback('wrong');
+        clearArenaTimers();
+        arenaRevertTimerRef.current = window.setTimeout(() => {
+          arenaRevertTimerRef.current = null;
+          if (academyViewRef.current !== 'arena' || activeArenaPuzzleRef.current?.id !== puzzle.id) {
+            return;
+          }
+          const win = window as Window & {
+            wizardChess?: {
+              setTacticsFenPosition?: (
+                fen?: string,
+                options?: { viewSide?: 'w' | 'b'; immediateCamera?: boolean }
+              ) => boolean;
+            };
+          };
+          win.wizardChess?.setTacticsFenPosition?.(arenaStepFenRef.current, {
+            viewSide: puzzle.turn,
+            immediateCamera: true,
+          });
+          setArenaFeedback('idle');
+        }, 850);
+        return;
+      }
+
       setAcademyFeedback(detail?.isCheckmate ? 'solved' : 'wrong');
     };
     window.addEventListener('wizardchess:academy-move', handleAcademyMove);
@@ -1092,6 +1306,7 @@ export default function App() {
         window.clearTimeout(tutorialAnimTimerRef.current);
         tutorialAnimTimerRef.current = null;
       }
+      clearArenaTimers();
     };
   }, []);
 
@@ -1125,6 +1340,120 @@ export default function App() {
     setTutorialAnimating(false);
     setAcademyError(null);
     setAcademyVisible(true);
+  };
+
+  const loadArenaPuzzleOnBoard = (puzzle: TacticPuzzle, immediateCamera = false) => {
+    clearArenaTimers();
+    const win = window as Window & {
+      wizardChess?: {
+        enterTacticsPuzzle?: (
+          fen?: string,
+          options?: { viewSide?: 'w' | 'b'; immediateCamera?: boolean }
+        ) => boolean;
+      };
+    };
+    if (!win.wizardChess?.enterTacticsPuzzle?.(puzzle.fen, { viewSide: puzzle.turn, immediateCamera })) {
+      setAcademyError('Taktički izazov nije mogao da se učita na tablu. Pokušaj ponovo.');
+      return false;
+    }
+    evalReqSeqRef.current += 1;
+    stockfishService.cancelPending();
+    setIsEvaluating(false);
+    arenaStepFenRef.current = puzzle.fen;
+    setActiveArenaPuzzle(puzzle);
+    setArenaMoveIndex(0);
+    setArenaFeedback('idle');
+    setArenaHintCount(0);
+    setArenaMistakeMade(false);
+    setArenaRatingDelta(null);
+    setAcademyError(null);
+    setAcademyView('arena');
+    return true;
+  };
+
+  const handleOpenTacticsArena = (initialMode: ArenaTrainingMode = arenaModeRef.current, themeOverride?: TacticThemeFilter) => {
+    if (isOnlineModeRef.current) return;
+    const nextTheme = themeOverride ?? arenaThemeRef.current;
+    setArenaMode(initialMode);
+    if (themeOverride) {
+      setArenaTheme(themeOverride);
+    }
+
+    if (initialMode === 'survival') {
+      setArenaLives(3);
+      setArenaStreak(0);
+      arenaSeenIdsRef.current = [];
+    }
+
+    if (initialMode === 'daily') {
+      setArenaDailyLoading(true);
+      setAcademyError(null);
+      void fetchDailyLichessPuzzle()
+        .then((res) => {
+          setArenaDailyStatus(res.status);
+          loadArenaPuzzleOnBoard(res.puzzle, academyViewRef.current === 'arena');
+        })
+        .catch(() => {
+          setAcademyError('Dnevni izazov trenutno nije mogao da se učita.');
+        })
+        .finally(() => {
+          setArenaDailyLoading(false);
+        });
+      return;
+    }
+
+    const picked = getNextArenaPuzzle(initialMode, {
+      theme: nextTheme,
+      currentPuzzleId: activeArenaPuzzleRef.current?.id,
+      excludeIds: initialMode === 'survival' ? arenaSeenIdsRef.current : [],
+      survivalStreak: initialMode === 'survival' ? 0 : undefined,
+    });
+    loadArenaPuzzleOnBoard(picked, academyViewRef.current === 'arena');
+  };
+
+  const handleArenaNextPuzzle = () => {
+    const mode = arenaModeRef.current;
+    if (mode === 'daily') {
+      handleOpenTacticsArena('elo');
+      return;
+    }
+    const picked = getNextArenaPuzzle(mode, {
+      theme: arenaThemeRef.current,
+      currentPuzzleId: activeArenaPuzzleRef.current?.id,
+      excludeIds: mode === 'survival' ? arenaSeenIdsRef.current : [],
+      survivalStreak: mode === 'survival' ? arenaStreakRef.current : undefined,
+    });
+    loadArenaPuzzleOnBoard(picked, true);
+  };
+
+  const handleArenaRetryPuzzle = () => {
+    const puzzle = activeArenaPuzzleRef.current;
+    if (!puzzle) return;
+    if (arenaModeRef.current === 'survival' && arenaFeedbackRef.current === 'gameover') {
+      handleOpenTacticsArena('survival');
+      return;
+    }
+    loadArenaPuzzleOnBoard(puzzle, true);
+  };
+
+  const handleLeaveArena = () => {
+    clearArenaTimers();
+    setIs2DMode(false);
+    const win = window as Window & {
+      wizardChess?: { exitAcademy?: () => boolean };
+    };
+    if (!win.wizardChess?.exitAcademy?.()) {
+      setAcademyError('Prethodna partija nije mogla automatski da se vrati.');
+      return;
+    }
+    restoreEvalFromEngine();
+    setActiveArenaPuzzle(null);
+    setArenaMoveIndex(0);
+    setArenaFeedback('idle');
+    setArenaHintCount(0);
+    setArenaRatingDelta(null);
+    setAcademyView('home');
+    setAcademyError(null);
   };
 
   const handleStartPuzzle = (id: string) => {
@@ -1514,11 +1843,13 @@ export default function App() {
   };
 
   const handleCloseAcademy = () => {
+    clearArenaTimers();
     if (tutorialAnimTimerRef.current !== null) {
       window.clearTimeout(tutorialAnimTimerRef.current);
       tutorialAnimTimerRef.current = null;
     }
-    if (academyView === 'puzzle' || academyView === 'tutorial') {
+    if (academyView === 'puzzle' || academyView === 'tutorial' || academyView === 'arena') {
+      setIs2DMode(false);
       const win = window as Window & {
         wizardChess?: { exitAcademy?: () => boolean };
       };
@@ -1530,6 +1861,8 @@ export default function App() {
     }
     setTutorialAutoPlay(false);
     setTutorialAnimating(false);
+    setActiveArenaPuzzle(null);
+    setArenaFeedback('idle');
     setAcademyView('home');
     setAcademyVisible(false);
     setAcademyError(null);
@@ -1586,7 +1919,8 @@ export default function App() {
           handleUndoMove();
         }
       } else if (e.key === '2') {
-        if (!e.ctrlKey && !e.metaKey && !e.altKey && !academyVisible && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isBoardEditorOpen && !isTypingTarget(e.target)) {
+        const allow2DToggle = !academyVisible || academyView === 'arena';
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && allow2DToggle && !pendingPromotion && !onlineModalOpen && !accountModalOpen && !isBoardEditorOpen && !isTypingTarget(e.target)) {
           setIs2DMode((prev) => !prev);
         }
       }
@@ -1602,7 +1936,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleResize);
     };
-  }, [academyVisible, is2DMode, isBoardEditorOpen, pendingPromotion, onlineModalOpen, accountModalOpen]);
+  }, [academyVisible, academyView, is2DMode, isBoardEditorOpen, pendingPromotion, onlineModalOpen, accountModalOpen]);
 
   const handleOpenOnlineModal = (tab: 'create' | 'join' = 'create') => {
     multiplayerService.clearError();
@@ -2634,6 +2968,18 @@ export default function App() {
           tutorialGameOver={tutorialGameOver}
           tutorialAutoPlay={tutorialAutoPlay}
           customLessons={customLessons}
+          arenaMode={arenaMode}
+          arenaTheme={arenaTheme}
+          arenaPuzzle={activeArenaPuzzle}
+          arenaMoveIndex={arenaMoveIndex}
+          arenaFeedback={arenaFeedback}
+          arenaLives={arenaLives}
+          arenaStreak={arenaStreak}
+          arenaHintCount={arenaHintCount}
+          arenaRatingDelta={arenaRatingDelta}
+          arenaDailyLoading={arenaDailyLoading}
+          arenaDailyStatus={arenaDailyStatus}
+          is2DMode={is2DMode}
           error={academyError}
           onClose={handleCloseAcademy}
           onOpenPuzzle={handleStartPuzzle}
@@ -2642,6 +2988,14 @@ export default function App() {
           hasNextPuzzle={PUZZLES.findIndex((puzzle) => puzzle.id === academyPuzzleId) < PUZZLES.length - 1}
           onShowHint={() => setAcademyHintCount((count) => Math.min(count + 1, 3))}
           onRetry={handleRetryPuzzle}
+          onOpenArena={(mode, theme) => handleOpenTacticsArena(mode, theme)}
+          onChangeArenaMode={(mode) => handleOpenTacticsArena(mode)}
+          onChangeArenaTheme={(theme) => handleOpenTacticsArena('theme', theme)}
+          onArenaShowHint={() => setArenaHintCount((count) => Math.min(count + 1, 3))}
+          onArenaRetry={handleArenaRetryPuzzle}
+          onArenaNext={handleArenaNextPuzzle}
+          onLeaveArena={handleLeaveArena}
+          onToggleArena2D={() => setIs2DMode((prev) => !prev)}
           onOpenTutorial={handleOpenTutorial}
           onSelectTutorialLesson={(id) => handleSelectTutorialLesson(id)}
           onPlayTutorialStep={handlePlayTutorialStep}
@@ -2662,6 +3016,8 @@ export default function App() {
         isOnlineMode={isOnlineMode}
         isAnalysisMode={analysisMode}
         isEditorMode={isBoardEditorOpen}
+        isTacticsMode={academyVisible && academyView === 'arena'}
+        tacticsTitle={activeArenaPuzzle?.title}
         evalState={evalState}
         isEvaluating={isEvaluating}
         hintMessage={aiMessage}
