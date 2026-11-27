@@ -1631,3 +1631,106 @@ test('Taktička arena Elo, Survival selection, and 2D/3D UI & engine wiring are 
   assert.ok(cssSrc.includes('body.academy-2d-open .chess-2d-backdrop'));
 });
 
+test('EvalBar fallback evaluator and StockfishService resilience prevent frozen 0.0 evaluation', async () => {
+  const sfServiceSrc = fs.readFileSync(path.join(ROOT, 'src/services/stockfishService.ts'), 'utf-8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'src/wizardChessEngine.js'), 'utf-8');
+  const appSrc = fs.readFileSync(path.join(ROOT, 'src/App.tsx'), 'utf-8');
+  const cssSrc = fs.readFileSync(path.join(ROOT, 'src/styles.css'), 'utf-8');
+
+  assert.ok(sfServiceSrc.includes('hasEvalScore: boolean'));
+  assert.ok(sfServiceSrc.includes('hasScore: boolean'));
+  assert.ok(sfServiceSrc.includes('return outcome?.hasEvalScore ? outcome.evalState : null;'));
+  assert.ok(sfServiceSrc.includes('public isReadyNow(): boolean'));
+  assert.ok(sfServiceSrc.includes('this.initFailures >= 3'));
+  assert.ok(sfServiceSrc.includes('15000'));
+  assert.ok(sfServiceSrc.includes('this.readyPromise = null;'));
+  assert.ok(sfServiceSrc.includes('best.sideScoreCp - 115'));
+
+  assert.ok(engineSrc.includes('function evaluatePositionFallback()'));
+  assert.ok(engineSrc.includes('function quiesceEval('));
+  assert.ok(engineSrc.includes('function searchEvalWithQuiescence('));
+  assert.ok(engineSrc.includes('evaluatePositionFallback,'));
+
+  assert.ok(appSrc.includes('getEngineFallbackEval'));
+  assert.ok(appSrc.includes('evaluateBoardWithFallback'));
+  assert.ok(cssSrc.includes('min-height: 0;'));
+
+  // Behavioral check with mocked Worker inside StockfishService
+  const prevWindow = globalThis.window;
+  const prevWorker = globalThis.Worker;
+  const prevNavigator = globalThis.navigator;
+  try {
+    let workerInstance = null;
+    class MockWorker {
+      constructor() {
+        this.onmessage = null;
+        this.onerror = null;
+        workerInstance = this;
+      }
+      postMessage(cmd) {
+        queueMicrotask(() => {
+          if (!this.onmessage) return;
+          if (cmd === 'uci') {
+            this.onmessage({ data: 'uciok' });
+          } else if (cmd === 'isready') {
+            this.onmessage({ data: 'readyok' });
+          } else if (typeof cmd === 'string' && cmd.startsWith('go ')) {
+            if (MockWorker.emitScore) {
+              this.onmessage({ data: 'info depth 8 multipv 1 score cp -160 pv e7e5' });
+            }
+            this.onmessage({ data: 'bestmove e7e5' });
+          }
+        });
+      }
+      terminate() {}
+    }
+    MockWorker.emitScore = true;
+
+    globalThis.window = globalThis;
+    globalThis.Worker = MockWorker;
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { webdriver: false },
+      configurable: true,
+    });
+
+    const { stockfishService } = await import(`../src/services/stockfishService.ts?t=${Date.now()}`);
+    const ok = await stockfishService.init();
+    assert.equal(ok, true);
+    assert.equal(stockfishService.isReadyNow(), true);
+
+    // Black to move with -160 cp from Black's POV => +160 cp for White
+    const eval1 = await stockfishService.evaluatePosition(
+      'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1',
+      120
+    );
+    assert.deepEqual(eval1, {
+      whiteCp: 160,
+      mateIn: null,
+      bestMoveUci: 'e7e5',
+      depth: 8,
+    });
+
+    // When bestmove arrives without any info score line, evaluatePosition must return null instead of bogus 0.0
+    MockWorker.emitScore = false;
+    const evalNoScore = await stockfishService.evaluatePosition(
+      'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1',
+      120
+    );
+    assert.equal(evalNoScore, null);
+    assert.ok(workerInstance !== null);
+    stockfishService.terminate();
+  } finally {
+    globalThis.window = prevWindow;
+    globalThis.Worker = prevWorker;
+    if (prevNavigator !== undefined) {
+      Object.defineProperty(globalThis, 'navigator', {
+        value: prevNavigator,
+        configurable: true,
+      });
+    } else {
+      delete globalThis.navigator;
+    }
+  }
+});
+
+

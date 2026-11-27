@@ -212,6 +212,35 @@ export default function App() {
   const [playerColor, setPlayerColor] = useState<'w' | 'b'>('w');
   const evalBeforeRef = useRef<StockfishEval>({ whiteCp: 0, mateIn: null });
   const evalReqSeqRef = useRef(0);
+
+  const getEngineFallbackEval = (): StockfishEval | null => {
+    const win = window as Window & {
+      wizardChess?: { evaluatePositionFallback?: () => StockfishEval | null };
+    };
+    return win.wizardChess?.evaluatePositionFallback?.() ?? null;
+  };
+
+  const evaluateBoardWithFallback = async (
+    fen: string,
+    movetimeMs = 120,
+    evalSeq?: number
+  ): Promise<StockfishEval | null> => {
+    const fallbackEval = getEngineFallbackEval();
+    if (!stockfishService.isSupportedEnvironment()) {
+      return fallbackEval;
+    }
+    if (
+      !stockfishService.isReadyNow() &&
+      fallbackEval &&
+      (evalSeq === undefined || evalSeq === evalReqSeqRef.current) &&
+      !isOnlineModeRef.current &&
+      !academyVisibleRef.current
+    ) {
+      setEvalState(fallbackEval);
+    }
+    const sfEval = await stockfishService.evaluatePosition(fen, movetimeMs);
+    return sfEval ?? fallbackEval;
+  };
   const [academyVisible, setAcademyVisible] = useState(false);
   const academyVisibleRef = useRef(academyVisible);
   academyVisibleRef.current = academyVisible;
@@ -760,8 +789,7 @@ export default function App() {
       if (undoFen) {
         const evalSeq = ++evalReqSeqRef.current;
         setIsEvaluating(true);
-        void stockfishService
-          .evaluatePosition(undoFen, 120)
+        void evaluateBoardWithFallback(undoFen, 120, evalSeq)
           .then((evalRes) => {
             if (evalSeq !== evalReqSeqRef.current || !evalRes) return;
             evalBeforeRef.current = evalRes;
@@ -893,11 +921,11 @@ export default function App() {
             enrichedDetail.evalLabel = evalToDisplay(drawEval).label;
           } else if (detail.fen) {
             const evalSeq = ++evalReqSeqRef.current;
+            const prevEval = evalBeforeRef.current;
             setIsEvaluating(true);
             try {
-              const nextEval = await stockfishService.evaluatePosition(detail.fen, 120);
+              const nextEval = await evaluateBoardWithFallback(detail.fen, 120, evalSeq);
               if (nextEval && evalSeq === evalReqSeqRef.current && !isOnlineModeRef.current && !academyVisibleRef.current) {
-                const prevEval = evalBeforeRef.current;
                 evalBeforeRef.current = nextEval;
                 setEvalState(nextEval);
                 enrichedDetail.evalLabel = evalToDisplay(nextEval).label;
@@ -1006,8 +1034,7 @@ export default function App() {
         if (detail?.customFen && detail?.fen) {
           const evalSeq = ++evalReqSeqRef.current;
           setIsEvaluating(true);
-          void stockfishService
-            .evaluatePosition(detail.fen, 140)
+          void evaluateBoardWithFallback(detail.fen, 140, evalSeq)
             .then((evalRes) => {
               if (evalSeq === evalReqSeqRef.current && evalRes) {
                 evalBeforeRef.current = evalRes;
@@ -1315,12 +1342,19 @@ export default function App() {
     const restoredFen = win.wizardChess?.getFen?.();
     if (restoredFen && !isOnlineModeRef.current) {
       const evalSeq = ++evalReqSeqRef.current;
-      void stockfishService.evaluatePosition(restoredFen, 120).then((evalRes) => {
-        if (evalSeq === evalReqSeqRef.current && evalRes) {
-          evalBeforeRef.current = evalRes;
-          setEvalState(evalRes);
-        }
-      });
+      setIsEvaluating(true);
+      void evaluateBoardWithFallback(restoredFen, 120, evalSeq)
+        .then((evalRes) => {
+          if (evalSeq === evalReqSeqRef.current && evalRes) {
+            evalBeforeRef.current = evalRes;
+            setEvalState(evalRes);
+          }
+        })
+        .finally(() => {
+          if (evalSeq === evalReqSeqRef.current) {
+            setIsEvaluating(false);
+          }
+        });
       if (guidedModeRef.current) {
         window.setTimeout(() => {
           void runMoveHint({ isGuided: true, awardXp: false });
@@ -1792,8 +1826,7 @@ export default function App() {
     if (takeoverFen) {
       const evalSeq = ++evalReqSeqRef.current;
       setIsEvaluating(true);
-      void stockfishService
-        .evaluatePosition(takeoverFen, 120)
+      void evaluateBoardWithFallback(takeoverFen, 120, evalSeq)
         .then((evalRes) => {
           if (evalSeq === evalReqSeqRef.current && evalRes) {
             evalBeforeRef.current = evalRes;
@@ -2079,6 +2112,11 @@ export default function App() {
         };
       } else {
         const fallbackMove = win.wizardChess?.getFallbackBestMove?.();
+        const fallbackEval = getEngineFallbackEval();
+        if (fallbackEval) {
+          setEvalState(fallbackEval);
+          evalBeforeRef.current = fallbackEval;
+        }
         if (fallbackMove) {
           win.wizardChess?.showHintHighlight?.(
             fallbackMove.fromR,
@@ -2091,6 +2129,7 @@ export default function App() {
             toSquare: fallbackMove.toSquare,
             pieceType: fallbackMove.pieceType,
             promotion: fallbackMove.promotion,
+            evalLabel: fallbackEval ? evalToDisplay(fallbackEval).label : undefined,
           };
         }
       }
@@ -2170,6 +2209,23 @@ export default function App() {
     const livePlayerColor = win.wizardChess?.getPlayerColor?.() || playerColor;
     setCurrentBoardFen(liveFen);
     setCurrentBoardTurn(liveTurn);
+
+    if (liveFen) {
+      const evalSeq = ++evalReqSeqRef.current;
+      setIsEvaluating(true);
+      void evaluateBoardWithFallback(liveFen, 120, evalSeq)
+        .then((evalRes) => {
+          if (evalSeq === evalReqSeqRef.current && evalRes && !isOnlineModeRef.current && !academyVisibleRef.current) {
+            evalBeforeRef.current = evalRes;
+            setEvalState(evalRes);
+          }
+        })
+        .finally(() => {
+          if (evalSeq === evalReqSeqRef.current) {
+            setIsEvaluating(false);
+          }
+        });
+    }
 
     if (next) {
       setAiVoiceCue(undefined);

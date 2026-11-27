@@ -4017,6 +4017,40 @@ export function initWizardChess() {
       };
     }
 
+    function evaluatePositionFallback() {
+      try {
+        if (gameOver) {
+          if (isKingInCheck(currentTurn, boardState)) {
+            return {
+              whiteCp: currentTurn === 'w' ? -10000 : 10000,
+              mateIn: 0,
+            };
+          }
+          return { whiteCp: 0, mateIn: null };
+        }
+        const rawScore = searchEvalWithQuiescence(currentTurn, 'w', 2, -Infinity, Infinity, 0);
+        if (!Number.isFinite(rawScore)) {
+          return {
+            whiteCp: Math.max(-9500, Math.min(9500, Math.round(evaluateSearchPosition('w')))),
+            mateIn: null,
+          };
+        }
+        if (Math.abs(rawScore) >= 99000) {
+          const plies = Math.max(1, 100000 - Math.abs(rawScore));
+          const moves = Math.ceil(plies / 2);
+          const mateIn = rawScore > 0 ? moves : -moves;
+          const whiteCp = rawScore > 0 ? 10000 - moves * 10 : -10000 + moves * 10;
+          return { whiteCp, mateIn };
+        }
+        return {
+          whiteCp: Math.max(-9500, Math.min(9500, Math.round(rawScore))),
+          mateIn: null,
+        };
+      } catch {
+        return null;
+      }
+    }
+
     function getFen() {
       return boardToFen(boardState, {
         currentTurn,
@@ -5150,6 +5184,111 @@ export function initWizardChess() {
       return bestScore;
     }
 
+    function getLegalCaptureMoves(color) {
+      const all = [];
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const piece = boardState[r][c];
+          if (!piece || piece.color !== color) continue;
+          const pseudo = getPseudoMovesForPiece(r, c, boardState, enPassantTarget);
+          for (const m of pseudo) {
+            const isPromo = piece.type === 'pawn' && (m.r === 0 || m.r === 7);
+            if (!m.capture && !m.enPassant && !isPromo) continue;
+            const savedTarget = boardState[m.r][m.c];
+            const savedEpPawn = m.enPassant ? boardState[m.capturedR]?.[m.capturedC] : null;
+            boardState[m.r][m.c] = piece;
+            boardState[r][c] = null;
+            if (m.enPassant) {
+              boardState[m.capturedR][m.capturedC] = null;
+            }
+            const inCheck = isKingInCheck(piece.color, boardState);
+            boardState[r][c] = piece;
+            boardState[m.r][m.c] = savedTarget;
+            if (m.enPassant) {
+              boardState[m.capturedR][m.capturedC] = savedEpPawn;
+            }
+            if (!inCheck) {
+              all.push({
+                fromR: r,
+                fromC: c,
+                toR: m.r,
+                toC: m.c,
+                capture: m.capture,
+                enPassant: Boolean(m.enPassant),
+                capturedR: m.capturedR,
+                capturedC: m.capturedC,
+              });
+            }
+          }
+        }
+      }
+      return all;
+    }
+
+    function quiesceEval(colorToMove, aiColor, alpha, beta, qDepth) {
+      const standPat = evaluateSearchPosition(aiColor);
+      if (qDepth >= 4) return standPat;
+      const maximizing = colorToMove === aiColor;
+      if (maximizing) {
+        if (standPat >= beta) return beta;
+        if (standPat > alpha) alpha = standPat;
+      } else {
+        if (standPat <= alpha) return alpha;
+        if (standPat < beta) beta = standPat;
+      }
+
+      const captures = orderSearchMoves(getLegalCaptureMoves(colorToMove));
+      if (captures.length === 0) return standPat;
+
+      const nextColor = colorToMove === 'w' ? 'b' : 'w';
+      let best = standPat;
+      for (const move of captures) {
+        const undoMove = applySearchMove(move);
+        const score = quiesceEval(nextColor, aiColor, alpha, beta, qDepth + 1);
+        undoMove();
+        if (maximizing) {
+          if (score > best) best = score;
+          if (best > alpha) alpha = best;
+          if (beta <= alpha) break;
+        } else {
+          if (score < best) best = score;
+          if (best < beta) beta = best;
+          if (beta <= alpha) break;
+        }
+      }
+      return best;
+    }
+
+    function searchEvalWithQuiescence(colorToMove, aiColor, depth, alpha, beta, ply) {
+      const legalMoves = getAllLegalMoves(colorToMove);
+      if (legalMoves.length === 0) {
+        if (!isKingInCheck(colorToMove, boardState)) return 0;
+        return colorToMove === aiColor ? -100000 + ply : 100000 - ply;
+      }
+      if (depth === 0) return quiesceEval(colorToMove, aiColor, alpha, beta, 0);
+
+      const maximizing = colorToMove === aiColor;
+      let bestScore = maximizing ? -Infinity : Infinity;
+      const nextColor = colorToMove === 'w' ? 'b' : 'w';
+
+      for (const move of orderSearchMoves(legalMoves)) {
+        const undoMove = applySearchMove(move);
+        const score = searchEvalWithQuiescence(nextColor, aiColor, depth - 1, alpha, beta, ply + 1);
+        undoMove();
+
+        if (maximizing) {
+          bestScore = Math.max(bestScore, score);
+          alpha = Math.max(alpha, bestScore);
+        } else {
+          bestScore = Math.min(bestScore, score);
+          beta = Math.min(beta, bestScore);
+        }
+        if (beta <= alpha) break;
+      }
+
+      return bestScore;
+    }
+
     function chooseHardAIMove(color) {
       const legalMoves = orderSearchMoves(getAllLegalMoves(color));
       if (legalMoves.length === 0) return null;
@@ -6233,6 +6372,7 @@ export function initWizardChess() {
       clearHintHighlight,
       getHintHighlight: () => (activeHintCoords ? { ...activeHintCoords } : null),
       getFallbackBestMove,
+      evaluatePositionFallback,
       getAIDifficulty: () => aiDifficulty,
       getGameContext: () => {
         const fileChars = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];

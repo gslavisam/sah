@@ -5,7 +5,7 @@ import {
   getStockfishEloProfile,
   normalizeScoreToWhite,
   parseUciMove,
-} from '../shared/chessRules';
+} from '../shared/chessRules.ts';
 
 const STOCKFISH_WORKER_URL = '/stockfish/stockfish-19-lite-single.js';
 
@@ -32,6 +32,7 @@ interface SearchOutcome {
   evalState: StockfishEval;
   bestMoveUci: string | null;
   multiPvCandidates: MultiPvCandidate[];
+  hasEvalScore: boolean;
 }
 
 interface QueuedSearchJob {
@@ -41,7 +42,13 @@ interface QueuedSearchJob {
   timeoutMs: number;
   resolve: (result: SearchOutcome | null) => void;
   cancelled: boolean;
-  latestScore: { whiteCp: number; mateIn: number | null; depth?: number; pvMove?: string | null };
+  latestScore: {
+    whiteCp: number;
+    mateIn: number | null;
+    depth?: number;
+    pvMove?: string | null;
+    hasScore: boolean;
+  };
   multiPvMap: Map<number, MultiPvCandidate>;
   timeoutHandle: ReturnType<typeof setTimeout> | null;
 }
@@ -108,12 +115,12 @@ function pickSubMasterMultiPvMove(
   const best = sorted[0];
 
   if (difficulty === 'casual') {
-    if (best.mateFromSide === 1 && Math.random() < 0.85) {
+    if (best.mateFromSide === 1 && Math.random() < 0.9) {
       return best.moveUci;
     }
-    const nonBlunder = sorted.filter((c) => c.sideScoreCp >= best.sideScoreCp - 220);
+    const nonBlunder = sorted.filter((c) => c.sideScoreCp >= best.sideScoreCp - 115);
     const pool = (nonBlunder.length > 0 ? nonBlunder : sorted).slice(0, 4);
-    const weights = [0.46, 0.28, 0.16, 0.1];
+    const weights = [0.58, 0.24, 0.12, 0.06];
     let total = 0;
     for (let i = 0; i < pool.length; i++) total += weights[i] ?? 0.05;
     let roll = Math.random() * total;
@@ -146,6 +153,8 @@ class StockfishService {
   private readyPromise: Promise<boolean> | null = null;
   private isReady = false;
   private disabled = false;
+  private initFailures = 0;
+  private retryAfterMs = 0;
   private epoch = 0;
 
   private initTimer: ReturnType<typeof setTimeout> | null = null;
@@ -159,6 +168,10 @@ class StockfishService {
 
   private activeJob: QueuedSearchJob | null = null;
   private queue: QueuedSearchJob[] = [];
+
+  public isReadyNow(): boolean {
+    return Boolean(this.isReady && this.worker && !this.disabled);
+  }
 
   public isSupportedEnvironment(): boolean {
     if (this.disabled) return false;
@@ -177,8 +190,19 @@ class StockfishService {
     if (this.readyPromise) {
       return this.readyPromise;
     }
+    if (this.retryAfterMs > Date.now()) {
+      return Promise.resolve(false);
+    }
 
     const gen = ++this.initGeneration;
+    const recordInitFailure = () => {
+      this.initFailures += 1;
+      if (this.initFailures >= 3) {
+        this.disabled = true;
+      } else {
+        this.retryAfterMs = Date.now() + 3000;
+      }
+    };
 
     this.readyPromise = new Promise<boolean>((resolve) => {
       let settled = false;
@@ -201,11 +225,11 @@ class StockfishService {
       this.initResolve = finish;
       this.initTimer = setTimeout(() => {
         if (gen !== this.initGeneration) return;
-        console.warn('Stockfish WASM init timed out; falling back to JS chess AI.');
-        this.disabled = true;
+        console.warn('Stockfish WASM init timed out; falling back to local chess eval.');
+        recordInitFailure();
         this.cleanupWorker();
         finish(false);
-      }, 6000);
+      }, 15000);
 
       try {
         const worker = new Worker(STOCKFISH_WORKER_URL);
@@ -223,8 +247,8 @@ class StockfishService {
 
         worker.onerror = (err) => {
           if (gen !== this.initGeneration) return;
-          console.warn('Stockfish worker error; using JS fallback:', err);
-          this.disabled = true;
+          console.warn('Stockfish worker error; using local fallback:', err);
+          recordInitFailure();
           this.cleanupWorker();
           finish(false);
         };
@@ -237,6 +261,8 @@ class StockfishService {
 
         this.initWaiters.onReadyOk = () => {
           if (gen !== this.initGeneration) return;
+          this.initFailures = 0;
+          this.retryAfterMs = 0;
           this.isReady = true;
           finish(true);
         };
@@ -245,7 +271,7 @@ class StockfishService {
       } catch (err) {
         if (gen !== this.initGeneration) return;
         console.warn('Could not start Stockfish worker:', err);
-        this.disabled = true;
+        recordInitFailure();
         this.cleanupWorker();
         finish(false);
       }
@@ -285,6 +311,7 @@ class StockfishService {
       this.worker = null;
     }
     this.isReady = false;
+    this.readyPromise = null;
   }
 
   private post(cmd: string) {
@@ -329,12 +356,14 @@ class StockfishService {
             });
           }
         }
-        if (parsed.pvIndex === 1 && (!parsed.isBound || job.latestScore.depth === undefined)) {
+        if (parsed.pvIndex === 1 && (!parsed.isBound || !job.latestScore.hasScore)) {
           if (typeof parsed.whiteCp === 'number') {
             job.latestScore.whiteCp = parsed.whiteCp;
+            job.latestScore.hasScore = true;
           }
           if (parsed.mateIn !== undefined) {
             job.latestScore.mateIn = parsed.mateIn;
+            job.latestScore.hasScore = true;
           }
           if (typeof parsed.depth === 'number') {
             job.latestScore.depth = parsed.depth;
@@ -366,6 +395,7 @@ class StockfishService {
         },
         bestMoveUci,
         multiPvCandidates,
+        hasEvalScore: job.latestScore.hasScore,
       };
       this.activeJob = null;
       if (!job.cancelled) {
@@ -429,7 +459,7 @@ class StockfishService {
         timeoutMs,
         resolve,
         cancelled: false,
-        latestScore: { whiteCp: 0, mateIn: null },
+        latestScore: { whiteCp: 0, mateIn: null, hasScore: false },
         multiPvMap: new Map(),
         timeoutHandle: null,
       };
@@ -483,7 +513,7 @@ class StockfishService {
       ],
       Math.max(2000, movetimeMs + 1600)
     );
-    return outcome ? outcome.evalState : null;
+    return outcome?.hasEvalScore ? outcome.evalState : null;
   }
 
   public async getHintMove(fen: string, movetimeMs = 240): Promise<StockfishHintResult | null> {
@@ -568,6 +598,8 @@ class StockfishService {
     }
     this.readyPromise = null;
     this.disabled = false;
+    this.initFailures = 0;
+    this.retryAfterMs = 0;
   }
 }
 
